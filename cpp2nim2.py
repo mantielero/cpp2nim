@@ -19,38 +19,14 @@ import glob
 import textwrap
 import re
 from pprint import pprint
-import oyaml as yaml
+#import oyaml as yaml
 #import networkx as nx
 
+my_dict = {}
 
 #function_calls = []             # List of AST node objects that are function calls
 function_declarations = []      # List of AST node objects that are fucntion declarations
 
-
-def display(node, depth=0 ):
-    global CURRENT_FILE
-    fname = str(node.location.file).strip()
-    if  fname != CURRENT_FILE:
-        print("\n\n",fname)
-    CURRENT_FILE = fname
-    tmp = os.path.split(str(fname))[1]
-    ident = ">" * (depth)
-    if tmp == 'miniz.h':
-       #if node.kind == clang.cindex.CursorKind.TYPEDEF_DECL:
-        print("{:<10} [{:6}/{:3}] {}{:<15}: name={}".format(tmp, node.location.line, node.location.column, ident, node.kind.name, node.displayname or node.spelling) )
-
-           #print("   KIND:    ", node.kind)
-           #print("   SPELLING: ", node.spelling)
-           #print("      kind: ", node.type.element_type)
-           #print(dir(node))
-           #print("   X:", node.underlying_typedef_type.spelling)
-           #print("   COMMENT: ", node.raw_comment)
-
-
-
-
-           #print("   ", node)
-# 'access_specifier', 'availability', 'brief_comment', 'canonical', 'data', 'displayname', 'enum_type', 'enum_value', 'exception_specification_kind', 'extent', 'from_cursor_result', 'from_location', 'from_result', 'get_arguments', 'get_bitfield_width', 'get_children', 'get_definition', 'get_field_offsetof', 'get_included_file', 'get_num_template_arguments', 'get_template_argument_kind', 'get_template_argument_type', 'get_template_argument_unsigned_value', 'get_template_argument_value', 'get_tokens', 'get_usr', 'hash', 'is_abstract_record', 'is_anonymous', 'is_bitfield', 'is_const_method', 'is_converting_constructor', 'is_copy_constructor', 'is_default_constructor', 'is_default_method', 'is_definition', 'is_move_constructor', 'is_mutable_field', 'is_pure_virtual_method', 'is_scoped_enum', 'is_static_method', 'is_virtual_method', 'kind', 'lexical_parent', 'linkage', 'location', 'mangled_name', 'objc_type_encoding', 'raw_comment', 'referenced', 'result_type', 'semantic_parent', 'spelling', 'storage_class', 'tls_kind', 'translation_unit', 'type', 'underlying_typedef_type', 'walk_preorder', 'xdata'
 
 # Traverse the AST tree
 def get_nodes(node,depth=0):
@@ -59,73 +35,9 @@ def get_nodes(node,depth=0):
         yield from get_nodes(child, depth = depth+1)
 
 
-
-def emit_nim_TYPEDEF_DECL(node):
-    """
-    TODO:
-      {.impminiz.}
-      {.cdecl.}
-
-    typedef unsigned long mz_ulong;
-    mz_ulong* {.impminiz.} = culong
-
-    """
-    #print("# TODO: missing {.impminiz.} and {.cdecl.}")
-    name = node.displayname+"*"
-    #print(name)
-    tipo = node.underlying_typedef_type.spelling
-    if "(" in tipo:
-        col = node.location.column
-
-        inputs = []
-        output = []
-        for i in node.get_children():
-            if i.location.column < col:
-                if node.kind.PARM_DECL:
-                    output = i.spelling
-            else:
-                inputs.append( (i.spelling, get_nim_type(i.type.spelling)) )
-        #if output == []:
-
-        #print(inputs)
-        inputs = [" {}: {}".format(input[0],input[1]) for input in inputs]
-        inputs = ", ".join( inputs )
-        nimcode = "{} = proc( {} ):output".format(name,inputs, output)
-        #print( nimcode )
-        return nimcode
-    # ENUM
-    elif tipo[0:4] == "enum":
-        nimcode = "  {} = enum\n".format(name)
-        for i in node.get_children():
-            if i.kind == clang.cindex.CursorKind.ENUM_DECL:
-               for j in i.get_children():
-                  if j.kind == clang.cindex.CursorKind.ENUM_CONSTANT_DECL:
-                      _name = j.displayname
-                      _value = None
-
-                      for k in j.get_children():
-                          if k.kind == clang.cindex.CursorKind.INTEGER_LITERAL:
-                              _value = [m.spelling for m in k.get_tokens()][0]
-                      if _value != None:
-                          _line = "    {} = {},\n".format(_name,_value)
-                      else:
-                          _line = "    {},\n".format(_name)
-                      nimcode += _line
-        if nimcode[-2:] == ',\n':
-           nimcode = nimcode[0:-2]+"\n"
-        return nimcode
-
-    # NORMAL
-    else:
-        tipomod = get_nim_type(tipo)
-        if tipomod == None:
-            print("TODO : ", tipo)
-        return "{} = {}".format(name, tipomod )
-
 def get_nim_type( c_type ):
     c_type = c_type.strip()
-    #print(c_type)
-    
+
     isVar = True
     if c_type[0:5] == "const":
         c_type = c_type[5:].strip()
@@ -148,9 +60,22 @@ def get_nim_type( c_type ):
         return "cfloat"        
     if c_type in ["double"]:
         return "cdouble"
+    if c_type in ["char *"]:
+        return "cstring"
 
     if isVar:
         c_type = f"var {c_type}"
+
+    # xxxx::yyyy<zzzzz>
+    if "::" in c_type:
+        kernel = re.compile("([^<]+)[<]*([^>]*)[>]*")
+        _a, _b = kernel.findall(c_type)[0]
+        _tmp = _a.split("::")[-1]
+        _tmp = _tmp.capitalize()
+
+        my_dict[_tmp] = f'{_tmp} {{.importcpp: "{_a}", header: "<map>".}} [K] = object'
+        return f"{_tmp}[{_b}]"
+
     return c_type
 
 
@@ -214,6 +139,7 @@ def get_method(data):
             _result = _result[6:]
         if _result[-1] == "&":
             _result = _result[:-1].strip()
+        _result = get_nim_type( _result )
         _return = f': {_result}'
 
     _tmp = f'proc {data["name"]}*({_params}){_return}  {{.importcpp: "{data["name"]}".}}\n'
@@ -272,8 +198,6 @@ def export_per_file(data, files = [], output= "occt", filter=None):
                     _typedefs.append( get_typedef(item[2], _tmpFile))
                 elif item[1] == "class":
                     _classes.append(get_class(item[2], _tmpFile))
-        #_classes = list(set(_classes))  
-        #print(_classes)
                 
         _fname = ""
         _popfile = None
@@ -337,10 +261,6 @@ if __name__ == '__main__':
     except:
         pass
 
-    #_root, _dirs, _files = list(os.walk(_folder))[0]
-    #_files = [i for i in _files if ".hxx" in i]  # Remove the .lxx files
-    #_files = [i for i in _files if "gp_" == i[0:3]]
-    #print(_folder)
     _root = get_root(_folder)    
     _files = glob.glob(_folder, recursive = True)
 
@@ -375,12 +295,6 @@ if __name__ == '__main__':
             _node = {}
             # Operator
             if node.kind == clang.cindex.CursorKind.OVERLOADED_DECL_REF:
-                #print("\n\n")
-                #print(node.spelling, ">>>", node.kind)
-                #print("displayname: ",node.displayname)
-                #for i in node.get_arguments():
-                #    print("  argument>",i)
-                #pprint(dir(node))
                 pass
             # Constructors
             if node.kind == clang.cindex.CursorKind.CONSTRUCTOR:
@@ -407,23 +321,11 @@ if __name__ == '__main__':
                     if re.match("[+-=*\^/]+", "+-+=*^"):
                         _name = f'`{_tmp}`'
                 
-                #pprint(dir(node))
-                #print(node.result_type.spelling)
                 _data = {"name" : _name}
                 _data["result"] = node.result_type.spelling
                 _data["class_name"] = node.semantic_parent.spelling
                 _data["const_method"] = node.is_const_method()
-                #-----
-                #if _name == "SetX":
-                    #print(dir(node))
-                #    print(dir(node.result_type))
-                #    print(node.spelling)
-                #    print(node.result_type.spelling)
-                #    print(node.result_type.is_const_qualified())
-                #    print(node.is_const_method())
-                    #print(node.result_type.)
-                #-----
-                #_data["sourcefile"] = node.location.file.name
+
                 _params = []
                 for i in node.get_children():
                     if i.kind == clang.cindex.CursorKind.PARM_DECL:
@@ -431,23 +333,14 @@ if __name__ == '__main__':
                         _params.append((i.displayname, i.type.spelling))
                 _data["params"] = _params
                 _data["comment"] = node.brief_comment
-                #_methods.append( _data)
                 _all.append(( node.location.file.name, "method", _data ))
-
 
             # Classes
             if node.kind == clang.cindex.CursorKind.CLASS_DECL and node.is_definition():
             #if node.spelling == "gp_Trsf2d":
                 _data = { "name" : node.spelling,
                           "comment": node.brief_comment }
-                          #"kind": node.kind }
-                #if "Defines a non-persistent transformation" in _data["comment"]:
-                #print( dir(node) )
-                
-                #pprint(_data)
-                #print(node.is_definition())
                 _all.append(( node.location.file.name, "class", _data ))
-                
 
             # Types
             # Methods
@@ -464,160 +357,12 @@ if __name__ == '__main__':
                          filter=_root)
 
     _fp1 = open(_fname, "a+")
+    #_fp1.write("\n\n")
+    for k,v in my_dict.items():
+        _fp1.write(f"  {v}\n\n")
+
     for _file in _files:
         _fname = _file.split(_root)[1]
-        _fp1.write(f'include "{_fname}"\n')
+        _fname = os.path.splitext(_fname)[0]
+        _fp1.write(f'include "{_fname}.nim"\n')
     _fp1.close()            
-
-# TODO: when to add "var " like "this: var gp_Pnt". 
-# - Cuando devuelve "void"?
-
-
-
-"""
-//! For this point, assigns  the values Xp, Yp and Zp to its three coordinates.
-void SetCoord (const Standard_Real Xp, const Standard_Real Yp, const Standard_Real Zp);
-
-proc SetCoord*(this: var gp_Pnt; Index: Standard_Integer; Xi: Standard_Real) {.
-    importcpp: "SetCoord", header: "gp_Pnt.hxx".}
-
-        {
-          "id": "0x55f8bd65bc28",
-          "kind": "CXXMethodDecl",
-          "isUsed": true,
-          "name": "SetCoord",
-          "mangledName": "_ZN6gp_XYZ8SetCoordEddd",
-          "type": {
-            "qualType": "void (const Standard_Real, const Standard_Real, const Standard_Real)"
-          },
-          "inner": [
-            {
-              "id": "0x55f8bd65ba98",
-              "kind": "ParmVarDecl",
-              "name": "X",
-              "mangledName": "_ZZN6gp_XYZ8SetCoordEdddE1X",
-              "type": {
-                "desugaredQualType": "const double",
-                "qualType": "const Standard_Real",
-                "typeAliasDeclId": "0x55f8bc7ad080"
-              }
-            },
-            {
-              "id": "0x55f8bd65bb10",
-              "kind": "ParmVarDecl",
-              "name": "Y",
-              "mangledName": "_ZZN6gp_XYZ8SetCoordEdddE1Y",
-              "type": {
-                "desugaredQualType": "const double",
-                "qualType": "const Standard_Real",
-                "typeAliasDeclId": "0x55f8bc7ad080"
-              }
-            },
-            {
-              "id": "0x55f8bd65bb88",
-              "kind": "ParmVarDecl",
-              "name": "Z",
-              "mangledName": "_ZZN6gp_XYZ8SetCoordEdddE1Z",
-              "type": {
-                "desugaredQualType": "const double",
-                "qualType": "const Standard_Real",
-                "typeAliasDeclId": "0x55f8bc7ad080"
-              }
-            },
-
-
-"""
-
-"""
-    void SetCoord (const Standard_Integer Index, const Standard_Real Xi);
-  
-
-  
-  //! Assigns the given value to the X coordinate of this point.
-    void SetX (const Standard_Real X);
-  
-  //! Assigns the given value to the Y coordinate of this point.
-    void SetY (const Standard_Real Y);
-  
-  //! Assigns the given value to the Z coordinate of this point.
-    void SetZ (const Standard_Real Z);
-  
-  //! Assigns the three coordinates of Coord to this point.
-    void SetXYZ (const gp_XYZ& Coord);
-  
-
-  //! Returns the coordinate of corresponding to the value of  Index :
-  //! Index = 1 => X is returned
-  //! Index = 2 => Y is returned
-  //! Index = 3 => Z is returned
-  //! Raises OutOfRange if Index != {1, 2, 3}.
-  //! Raised if Index != {1, 2, 3}.
-    Standard_Real Coord (const Standard_Integer Index) const;
-  
-  //! For this point gives its three coordinates Xp, Yp and Zp.
-    void Coord (Standard_Real& Xp, Standard_Real& Yp, Standard_Real& Zp) const;
-  
-  //! For this point, returns its X coordinate.
-    Standard_Real X() const;
-  
-
-
-
-
-
-void SetX (const Standard_Real X);
-
-proc SetX*(this: var gp_Pnt; X: Standard_Real) {.importcpp: "SetX", header: "gp_Pnt.hxx".}
-
-
-
-proc SetXYZ*(this: var gp_Pnt; Coord: gp_XYZ) {.importcpp: "SetXYZ",
-    header: "gp_Pnt.hxx".}
-
-
-
-
-
-#----------
-Standard_Real Coord (const Standard_Integer Index) const;
-
-proc Coord*(this: gp_Pnt; Index: Standard_Integer): Standard_Real {.noSideEffect,
-    importcpp: "Coord", header: "gp_Pnt.hxx".}
-
-
-#-------
-
-  
-//! For this point gives its three coordinates Xp, Yp and Zp.
-void Coord (Standard_Real& Xp, Standard_Real& Yp, Standard_Real& Zp) const;
-
-proc Coord*(this: gp_Pnt; Xp: var Standard_Real; Yp: var Standard_Real;
-           Zp: var Standard_Real) {.noSideEffect, importcpp: "Coord",
-                                 header: "gp_Pnt.hxx".}
-
-"""
-
-"""
-[ 'access_specifier', 'availability', 'brief_comment', 'canonical', 'data', 'displayname',
- 'enum_type', 'enum_value', 'exception_specification_kind', 'extent', 'from_cursor_result',
- 'from_location', 'from_result', 'get_arguments', 'get_bitfield_width', 'get_children',
- 'get_definition', 'get_field_offsetof', 'get_included_file', 'get_num_template_arguments', 
- 'get_template_argument_kind', 'get_template_argument_type', 
- 'get_template_argument_unsigned_value', 'get_template_argument_value', 'get_tokens', 
- 'get_usr', 'hash', 'is_abstract_record', 'is_anonymous', 'is_bitfield', 'is_const_method', 
- 'is_converting_constructor', 'is_copy_constructor', 'is_default_constructor', 
- 'is_default_method', 'is_definition', 'is_move_constructor', 'is_mutable_field', 
- 'is_pure_virtual_method', 'is_scoped_enum', 'is_static_method', 'is_virtual_method', 'kind', 
- 'lexical_parent', 'linkage', 'location', 'mangled_name', 'objc_type_encoding', 'raw_comment', 
- 'referenced', 'result_type', 'semantic_parent', 'spelling', 'storage_class', 'tls_kind', 
- 'translation_unit', 'type', 'underlying_typedef_type', 'walk_preorder', 'xdata']
-
-['argument_types', 'data', 'element_count', 'element_type', 'from_result', 'get_address_space', 
-'get_align', 'get_array_element_type', 'get_array_size', 'get_canonical', 'get_class_type', 
-'get_declaration', 'get_exception_specification_kind', 'get_fields', 'get_named_type', 
-'get_num_template_arguments', 'get_offset', 'get_pointee', 'get_ref_qualifier', 'get_result', 
-'get_size', 'get_template_argument_type', 'get_typedef_name', 'is_const_qualified', 
-'is_function_variadic', 'is_pod', 'is_restrict_qualified', 'is_volatile_qualified', 'kind', 
-'spelling', 'translation_unit']
-
-"""
