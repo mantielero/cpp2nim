@@ -154,7 +154,7 @@ def get_typedef(data, include = None):   # TODO: añadir opción si no está ref
     _type = get_nim_type( data["underlying"] )
     _include = ""
     if include != None:
-        _include = f'include: "{include}", '
+        _include = f'header: "{include}", '
     return f'  {data["name"]}* {{.{_include}importcpp: "{data["name"]}".}} = {_type}\n'
     #_data[_file]["typedefs"].append((i["name"], _type))
 
@@ -163,7 +163,7 @@ def get_class(data, include = None, byref = True):
     _name = data["name"]
     _include = ""
     if include != None:
-        _include = f'include: "{include}", '
+        _include = f'header: "{include}", '
     _byref = ", byref" 
     if not byref:
         _byref = ", bycopy"
