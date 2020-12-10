@@ -73,7 +73,7 @@ def get_nim_type( c_type ):
         _tmp = _a.split("::")[-1]
         _tmp = _tmp.capitalize()
 
-        my_dict[_tmp] = f'{_tmp} {{.importcpp: "{_a}", header: "<map>".}} [K] = object'
+        my_dict[_tmp] = f'{_tmp}* {{.importcpp: "{_a}", header: "<map>".}} [K] = object'
         return f"{_tmp}[{_b}]"
 
     return c_type
