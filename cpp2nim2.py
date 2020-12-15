@@ -9,6 +9,29 @@ python cpp2nim.py "/usr/include/opencascade/gp_*.hxx" occt
 clang -Xclang -ast-dump -fno-diagnostics-color miniz.c
 
 TODO: si sale Clase & significa que hay que usar byref y en caso contrario: bycopy
+
+TODO: enum
+
+From:
+enum BRepPrim_Direction
+{
+BRepPrim_XMin,
+BRepPrim_XMax,
+BRepPrim_YMin,
+BRepPrim_YMax,
+BRepPrim_ZMin,
+BRepPrim_ZMax
+};
+
+
+To:
+type
+  BRepPrim_Direction* {.size: sizeof(cint), importcpp: "BRepPrim_Direction",
+                       header: "BRepPrim_Direction.hxx".} = enum
+    BRepPrim_XMin, BRepPrim_XMax, BRepPrim_YMin, BRepPrim_YMax, BRepPrim_ZMin,
+    BRepPrim_ZMax
+
+
 """
 
 import sys
@@ -74,7 +97,11 @@ def get_nim_type( c_type ):
         _tmp = _tmp.capitalize()
 
         my_dict[_tmp] = f'{_tmp}* {{.importcpp: "{_a}", header: "<map>".}} [K] = object'
-        return f"{_tmp}[{_b}]"
+        if _tmp[-1] == "*":
+            _tmp = f"ptr {_tmp[:-1]}"
+        if _b != "":
+            _b = f"[{_b}]"
+        return f"{_tmp}{_b}"
 
     return c_type
 
@@ -104,10 +131,8 @@ def export_params(params):
 def get_comment(data):
     _tmp = ""
     _comment = data["comment"]
-    #print("-----------")
     if  _comment != None:
         _comment = textwrap.fill(_comment, width=70).split("\n")
-        #print(">>>", len(_comment))
         for i in _comment:
             _tmp += f"  ## {i}\n"
     return _tmp
@@ -142,7 +167,14 @@ def get_method(data):
         _result = get_nim_type( _result )
         _return = f': {_result}'
 
-    _tmp = f'proc {data["name"]}*({_params}){_return}  {{.importcpp: "{data["name"]}".}}\n'
+    _methodName = data["name"]
+    _methodName = _methodName[0].lower() + _methodName[1:]
+    _importName = data["name"]
+    # Operator case
+    if _importName.startswith("`") and _importName.endswith("`"):
+        _importName = _importName[1:-1]
+        _importName = f"# {_importName} #"
+    _tmp = f'proc {_methodName}*({_params}){_return}  {{.importcpp: "{_importName}".}}\n'
     _tmp += get_comment(data) + "\n"
     return _tmp
 
