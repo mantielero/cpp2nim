@@ -2,7 +2,8 @@
 """ Usage: call with <filename> <typename>
 python cpp2nim.py "/usr/include/opencascade/gp_*.hxx" occt
 python cpp2nim.py /usr/include/osg/Geode geode
-python cpp2nim.py "/usr/include/osg/*" osg
+
+python cpp2nim.py "/usr/include/osg/**/*" osg
 python cpp2nim.py "/usr/include/osgViewer/**/*" osgViewer
 >>> import clang.cindex
 >>> index = clang.cindex.Index.create()
@@ -11,29 +12,11 @@ python cpp2nim.py "/usr/include/osgViewer/**/*" osgViewer
 clang -Xclang -ast-dump=json -x c++ -I/usr/include/osg -fsyntax-only /usr/include/osg/Geode  > geode.json
 
 clang -Xclang -ast-dump -fno-diagnostics-color miniz.c
+c2nim --cpp --header --out:gp_Pnt.nim /usr/include/opencascade/gp_Pnt.hxx
 
+-----
 TODO: si sale Clase & significa que hay que usar byref y en caso contrario: bycopy
 
-TODO: enum
-
-From:
-enum BRepPrim_Direction
-{
-BRepPrim_XMin,
-BRepPrim_XMax,
-BRepPrim_YMin,
-BRepPrim_YMax,
-BRepPrim_ZMin,
-BRepPrim_ZMax
-};
-
-
-To:
-type
-  BRepPrim_Direction* {.size: sizeof(cint), importcpp: "BRepPrim_Direction",
-                       header: "BRepPrim_Direction.hxx".} = enum
-    BRepPrim_XMin, BRepPrim_XMax, BRepPrim_YMin, BRepPrim_YMax, BRepPrim_ZMin,
-    BRepPrim_ZMax
 
 -----
 TODO:
@@ -41,6 +24,13 @@ C2NIM:
 importcpp: "osg::Geode(@)"
 YO:
 Geode(@)
+
+-----
+TODO: https://nim-lang.org/docs/tut2.html#object-oriented-programming-inheritance
+Definición de tipos. Si usamos "object of <something>", en algún momento 
+habrá que hacer un "object of RootObj". También hay que tener claro si usamos:
+"ref object of RootObj"
+
 """
 
 import sys
@@ -52,6 +42,7 @@ import textwrap
 import re
 from pprint import pprint
 from pathlib import Path
+import collections
 
 
 my_dict = {}
@@ -60,6 +51,53 @@ my_dict = {}
 function_declarations = []      # List of AST node objects that are fucntion declarations
 
 
+def print_line(node, field, spc, ident= 0):
+    try:
+        param = getattr(node, field)
+        #print("------->", type(param))
+        if callable(param):
+            param = param()
+        print(f"{spc}{field}: {param}")
+        if isinstance( param, clang.cindex.Cursor):
+            pp(_tmp, ident+ 4)
+        elif isinstance(param, clang.cindex.Type):
+            pptype(param, ident+4)
+
+        elif hasattr(param,'__iter__'):#isinstance(param, collections.Iterable):
+            pass
+            #print(f"{spc}>>CHILDREN START:")
+            #for i in param:
+            #    pp(i, ident+4)
+            #print(f"{spc}>>CHILDREN END:")                
+    except:
+        #print(f"{spc}{field}:  raises an exception!")    
+        pass
+
+def pptype(t, ident = 0):
+    spc = " " * ident
+    print(f"{spc}kind: ", node.kind) 
+    print(f"{spc}spelling: ", node.spelling)    
+    for i in dir(t):
+        if not i.startswith("_") and i not in ["kind", "spelling"]:
+            print_line(node, i, spc, ident)
+
+def pp(node, ident = 0):
+    """Pretty printer to inspect the nodes"""
+    spc = " " * ident
+    if ident == 0:
+        print("======= TOP =======")
+    else:
+        print(f"{spc}------")
+    print(f"{spc}kind: {node.kind}") 
+    print(f"{spc}spelling: {node.spelling}" )
+    for i in dir(node):
+        if i not in ["kind", "spelling"] and not i.startswith("_"):
+            print_line(node, i, spc, ident)   
+    if ident == 0:
+        print("======= BOTTOM =======")    
+    else:
+        print(f"{spc}------")
+
 # Traverse the AST tree
 def get_nodes(node,depth=0):
     yield (depth, node)
@@ -67,7 +105,7 @@ def get_nodes(node,depth=0):
         yield from get_nodes(child, depth = depth+1)
 
 
-def get_nim_type( c_type ):
+def get_nim_type( c_type ):   
     c_type = c_type.strip()
 
     isVar = True
@@ -131,25 +169,48 @@ def get_nim_type( c_type ):
         _tmp = _a.split("::")[-1]
         _tmp = _tmp.capitalize()
 
-        my_dict[_tmp] = f'#{_tmp}* {{.importcpp: "{_a}", header: "<map>".}} [K] = object'
+        my_dict[_tmp] = "#" + f'{_tmp}* {{.importcpp: "{_a}", header: "<map>".}} [K] = object'
         if _tmp[-1] == "*":
             _tmp = f"ptr {_tmp[:-1]}"
+        
         if _b != "":
+            # There may be several types
+            _b = _b.split(", ")
+            _b = [get_nim_type(_i) for _i in _b]
+            for idx in range(len(_b)):
+                if _b[idx][-1] == "*":
+                    _b[idx]  = f"ptr {_b[idx][:-1].strip()}"
+            _b = ",".join(_b)
             _b = f"[{_b}]"
         return f"{_tmp}{_b}"
 
     if "<" in c_type and ">" in c_type:
         c_type = c_type.replace("<", "[")
         c_type = c_type.replace(">", "]")
-        
+
+    if c_type[-1] == "*":
+        c_type = f"ptr {c_type[:-1].strip()}"
     return c_type
 
+
+NIM_KEYWORDS = ["addr", "and", "as", "asm", "bind", "block", "break",
+                "case", "cast", "concept", "const", "continue", "converter",
+                "defer", "discard", "distinct", "div", "do", "elif", "else",
+                "end", "enum", "except", "export", "finally", "for", "from",
+                "func", "if", "import", "in", "include", "interface", "is",
+                "isnot", "iterator", "let", "macro", "method", "mixin", "mod",
+                "nil", "not", "notin", "object", "of", "or", "out", "proc", "ptr",
+                "raise", "ref", "return", "shl", "shr", "static", "template",
+                "try", "tuple", "type", "using", "var", "when", "while", "xor",
+                "yield"]
 
 def clean(txt):
     txt = txt.replace("const", "")
     txt = txt.strip()
     if txt[-2:] == " &":
         txt = txt[:-2]
+    if txt in NIM_KEYWORDS:
+        txt = f"`{txt}`"
     return txt
 #----------- EXPORTING  
 
@@ -171,13 +232,14 @@ def export_params(params):
     return _params 
 
 
-def get_comment(data):
+def get_comment(data, n = 4):
+    spc = " " * n
     _tmp = ""
     _comment = data["comment"]
     if  _comment != None:
         _comment = textwrap.fill(_comment, width=70).split("\n")
         for i in _comment:
-            _tmp += f"  ## {i}\n"
+            _tmp += f"{spc}## {i}\n"
     return _tmp
 
 def get_constructor(data):
@@ -222,10 +284,6 @@ def get_method(data):
     if "templParams" in data:
         if len(data["templParams"]) > 0:
             _templParams = "[" + ";".join( data["templParams"] ) + "]"
-            #pprint(data)
-        #if _methodName == "addDrawable":
-        #    pprint(data)
-        #    pprint(_templParams)
 
     _tmp = f'proc {_methodName}*{_templParams}({_params}){_return}  {{.importcpp: "{_importName}".}}\n'
     _tmp += get_comment(data) + "\n"
@@ -234,13 +292,30 @@ def get_method(data):
 
 
 def get_typedef(data, include = None):   # TODO: añadir opción si no está referenciado, comentar
-    #for i in data:
-        #if i["name"] in _types:
     _type = get_nim_type( data["underlying"] )
     _include = ""
     if include != None:
         _include = f'header: "{include}", '
-    return f'  {data["name"]}* {{.{_include}importcpp: "{data["name"]}".}} = {_type}\n'
+
+    if data["is_function_proto"]:
+        # ActiveTextureProc* = proc (texture: GLenum)
+        _return = ""
+        if data["result"] not in ["void", "void *"]:
+            _result = data["result"].strip()
+            if _result.startswith("const "):
+                _result = _result[6:]
+            if _result[-1] == "&":
+                _result = _result[:-1].strip()
+            _result = get_nim_type( _result )
+            _return = f': {_result}'        
+        _params = export_params(data["params"])
+        #if _params != "":
+        #    _params = ", ".join(_params)
+        
+        _tmp = f"proc ({_params}){_return}"
+        return f'  {data["name"]}* {{.{_include}importcpp: "{data["name"]}".}} = {_tmp}\n'
+    else:
+        return f'  {data["name"]}* {{.{_include}importcpp: "{data["name"]}".}} = {_type}\n'
     #_data[_file]["typedefs"].append((i["name"], _type))
 
 def get_class(data, include = None, byref = True):
@@ -253,13 +328,50 @@ def get_class(data, include = None, byref = True):
         _byref = ", bycopy"
     _inheritance = ""
     if len(data["base"]) > 0:
-        _inheritance = " of "
+        _inheritance = " #of "
         _inheritance += data["base"][0]   # Nim does not support multiple inheritance
 
     _tmp = f'  {_name}* {{.{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
     _tmp += get_comment(data) + "\n"
     return _tmp    
 
+def get_enum(data, include = None):
+    """
+  BRepPrim_Direction* {.size: sizeof(cint), importcpp: "BRepPrim_Direction",
+                       header: "BRepPrim_Direction.hxx".} = enum
+    BRepPrim_XMin, BRepPrim_XMax, BRepPrim_YMin, BRepPrim_YMax, BRepPrim_ZMin,
+    BRepPrim_ZMax    
+    """
+    _name = data["name"]
+    
+    _include = ""
+    if include != None:
+        _include = f'header: "{include}", '
+
+    _type = get_nim_type(data["type"])
+    _type = f"size:sizeof({_type})"
+
+    #_items = [f'{i["name"]} = {i["value"]},\n{get_comment(i)}' for i in data["items"]]
+    #_itemsComments = [get_comment(i)  for i in data[items]]
+    #pprint(_items)
+    _itemsTxt = ""
+    _items = data["items"]
+    n = len(_items)
+    for i in range(len(_items)):
+        _i = _items[i]
+        _itemsTxt += f'    {_i["name"]} = {_i["value"]}'            
+        if i<n-1:
+            _itemsTxt += ","
+        _itemsTxt += "\n"
+        if _i["comment"] != None:
+            _itemsTxt += get_comment(_i, n=6)
+
+    #_items = ", ".join(_items)
+    _tmp = f'  {_name}* {{.{_type},{_include}importcpp: "{_name}".}} = enum\n'
+    if data["comment"] != None:
+        _tmp += get_comment(data) + "\n"
+    _tmp += _itemsTxt + "\n"
+    return _tmp 
 
 def export_per_file(data, files = [], output= "occt", filter=None):
     _fname = os.path.join(output,output) + ".nim"
@@ -272,6 +384,7 @@ def export_per_file(data, files = [], output= "occt", filter=None):
         _constructors = []
         _methods      = []
         _classes      = []
+        _enums        = []
         for item in data:
             if _file in item[0]:
                 _tmpFile = _file.split(filter)[1]
@@ -283,7 +396,8 @@ def export_per_file(data, files = [], output= "occt", filter=None):
                     _typedefs.append( get_typedef(item[2], _tmpFile))
                 elif item[1] == "class":
                     _classes.append(get_class(item[2], _tmpFile))
-                
+                elif item[1] == "enum":
+                    _enums.append(get_enum(item[2], _tmpFile))                
         _fname = ""
         _popfile = None
         if filter != None:
@@ -293,11 +407,12 @@ def export_per_file(data, files = [], output= "occt", filter=None):
         _nimname = _fname + ".nim"
         _newfiles.append( _nimname)        
         _fname = os.path.join(output, _nimname)
-        if len(_typedefs) > 0 or len(_classes) > 0:
+        if len(_typedefs) > 0 or len(_classes) > 0 or len(_enums) > 0:
+            for _i in _enums:
+                _fp1.write(_i)             
             for _i in _typedefs:
                 _fp1.write(_i)
             for _i in _classes:
-                #pprint(_i)
                 _fp1.write(_i)                
 
         if len(_constructors) > 1 or len(_methods) > 1:
@@ -329,6 +444,28 @@ def get_root(_blob):
         if "*" not in i:
             _out += i + "/"
     return _out
+
+
+def get_params_from_node(mynode):
+    _params = []
+    for i in node.get_children():
+        if i.kind == clang.cindex.CursorKind.PARM_DECL:
+            _paramName = i.displayname
+
+            _default = None
+            # Getting default values in params
+            for j in i.get_children():
+                for k in j.get_children():                                  
+                    if k.kind == clang.cindex.CursorKind.UNEXPOSED_EXPR:
+                        for m in k.get_tokens():
+                            _default = m.spelling
+                    if k.kind == clang.cindex.CursorKind.INTEGER_LITERAL:
+                        try:
+                            _default = k.get_tokens().__next__().spelling 
+                        except:
+                            pass  
+            _params.append((i.displayname, i.type.spelling, _default))                                                          
+    return _params    
 
 
 if __name__ == '__main__':
@@ -386,33 +523,8 @@ if __name__ == '__main__':
                 _data = { "name" : node.spelling,
                           "class_name": node.semantic_parent.spelling,
                           "comment": node.brief_comment }
-                #if node.canonical.displayname == "Geode()":
-                #    pprint(_data)
-                #    pprint(dir(node))
-                    #pprint(dir(node.semantic_parent))
-                #    t = node.semantic_parent
-                #    print(node.canonical.displayname)
-                #    print(node.lexical_parent.displayname)                    
-                #    print(node.semantic_parent.spelling)
-                    #print(t.displayname)
-                _params = []
-                for i in node.get_children():
-                    if i.kind == clang.cindex.CursorKind.PARM_DECL:
-                        _paramName = i.displayname
 
-                        _default = None
-                        # Getting default values in params
-                        for j in i.get_children():
-                            for k in j.get_children():                                  
-                                if k.kind == clang.cindex.CursorKind.UNEXPOSED_EXPR:
-                                    for m in k.get_tokens():
-                                        _default = m.spelling
-                                if k.kind == clang.cindex.CursorKind.INTEGER_LITERAL:
-                                    try:
-                                        _default = k.get_tokens().__next__().spelling 
-                                    except:
-                                        pass  
-                        _params.append((i.displayname, i.type.spelling, _default))                                                          
+                _params = get_params_from_node(node)
                 _data["params"] = _params
                 
                 _file = node.location.file.name
@@ -431,24 +543,7 @@ if __name__ == '__main__':
                 _data["result"] = node.result_type.spelling
                 _data["class_name"] = node.semantic_parent.spelling
                 _data["const_method"] = node.is_const_method()
-
-                _params = []
-                for i in node.get_children():
-                    if i.kind == clang.cindex.CursorKind.PARM_DECL:
-                        _paramName = i.displayname
-                        _default = None
-                        for j in i.get_children():
-                            for k in j.get_children():
-                                if k.kind == clang.cindex.CursorKind.INTEGER_LITERAL:
-                                    try:
-                                        _default = k.get_tokens().__next__().spelling 
-                                    except:
-                                        pass
-
-                        _params.append((i.displayname, i.type.spelling, _default))
-                        # virtual bool removeDrawables(unsigned int i,unsigned int numDrawablesToRemove=1);
-
-                _data["params"] = _params
+                _data["params"] = get_params_from_node(node) #_params
                 _data["comment"] = node.brief_comment
                 _all.append(( node.location.file.name, "method", _data ))
 
@@ -473,7 +568,21 @@ if __name__ == '__main__':
             # Methods
             if node.kind == clang.cindex.CursorKind.TYPEDEF_DECL:
                 _data = { "name" : node.displayname,
-                          "underlying": node.underlying_typedef_type.spelling }          
+                          "underlying": node.underlying_typedef_type.spelling,
+                          "is_function_proto": False}
+                
+                _data["params"] = get_params_from_node(node)
+                _data["result"] = node.result_type.spelling
+
+                _kind = node.underlying_typedef_type.kind
+                if _kind == clang.cindex.TypeKind.POINTER:
+                    _pointee = node.underlying_typedef_type.get_pointee()
+
+                    if _pointee.kind == clang.cindex.TypeKind.FUNCTIONPROTO:
+                        _result = _pointee.get_result().spelling
+                        _data["result"] = _result
+                        _data["is_function_proto"] = True
+
                 _all.append(( node.location.file.name, "typedef", _data ))
 
 
@@ -504,6 +613,21 @@ if __name__ == '__main__':
 
                 # Parámetros
                 _all.append(( node.location.file.name, "template", _data ))
+
+
+            if node.kind == clang.cindex.CursorKind.ENUM_DECL:
+                _data = { "name" : node.spelling,
+                          "comment": node.brief_comment,
+                          "type": node.enum_type.spelling }
+                _items = []
+                for i in node.get_children():
+                    if i.kind == clang.cindex.CursorKind.ENUM_CONSTANT_DECL:
+                        _items.append({"name":i.spelling,
+                                       "comment": i.brief_comment,
+                                       "value" : i.enum_value})
+
+                _data["items"] = _items
+                _all.append(( node.location.file.name, "enum", _data ))
 
         # Only consider data associated to the file itself
         _all = [i for i in _all if i[0] == include_file]
