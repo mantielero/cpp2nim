@@ -21,7 +21,8 @@ python cpp2nim.py "/usr/include/opencascade/gp_Pnt.hxx" occt
 
 And for OpenSceneGraph:
 ```
-python cpp2nim.py "/usr/include/osg/*" osg
+$ python cpp2nim.py "/usr/include/osg/*" osg
+$ python cpp2nim.py "/usr/include/osgViewer/**/*" osg
 ```
 
 > Provided that those libraries are installed on your system. (only tested on linux)
@@ -29,7 +30,7 @@ python cpp2nim.py "/usr/include/osg/*" osg
 I recommend to adapt it to your own needs. I think it can give a good start.
 
 # ToDo
-- There is a lot of missing stuff (enums). 
+- There is a lot of missing stuff. 
 - Spaguetty code
 - PassL, PassC
 - I don't know C++ (just the very basic)
