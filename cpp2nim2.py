@@ -2,7 +2,8 @@
 """ Usage: call with <filename> <typename>
 python cpp2nim.py "/usr/include/opencascade/gp_*.hxx" occt
 python cpp2nim.py /usr/include/osg/Geode geode
-
+python cpp2nim.py "/usr/include/osg/*" osg
+python cpp2nim.py "/usr/include/osgViewer/**/*" osgViewer
 >>> import clang.cindex
 >>> index = clang.cindex.Index.create()
 >>> tu = index.parse("/usr/include/opencascade/gp_Pnt.hxx", ['-x', 'c++',  "-I/usr/include/opencascade"], None, clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD)
@@ -36,60 +37,10 @@ type
 
 -----
 TODO:
-El tipo de Geode debería ser:
-C++:
-   class Geode : public Group
-
-type
-  Geode* {.importcpp: "osg::Geode", header: "Geode", bycopy.} = object of Group
-
-pero yo:
-  Geode* {.header: "Geode", importcpp: "Geode", byref.} = object
------
-TODO:
-C++:
-        /** Copy constructor using CopyOp to manage deep vs shallow copy.*/
-        Geode(const Geode&,const CopyOp& copyop=CopyOp::SHALLOW_COPY);
 C2NIM:
-  proc constructGeode*(a1: Geode; copyop: CopyOp = SHALLOW_COPY): Geode {.constructor,
-      importcpp: "osg::Geode(@)", header: "Geode".}
-
-CPP2NIM:
-  proc constructor_Geode*(Geode, copyop: Copyop): Geode {.constructor,importcpp: "Geode(@)".}
-    ## Copy constructor using CopyOp to manage deep vs shallow copy.
-
-TODO:
-C++:
-template<class T> bool addDrawable( const ref_ptr<T>& drawable ) { return addDrawable(drawable.get()); }
-
-C2NIM:
-proc addDrawable*[T](this: var Geode; drawable: ref_ptr[T]): bool {.
-    importcpp: "addDrawable", header: "Geode".}
-
-CPP2NIM:
-nothing
-
-TODO: 
-C++:
-        virtual bool removeDrawables(unsigned int i,unsigned int numDrawablesToRemove=1);
-C2NIM:
-  proc removeDrawables*(this: var Geode; i: cuint; numDrawablesToRemove: cuint = 1): bool {.
-    importcpp: "removeDrawables", header: "Geode".}
-
-CPP2NIM:
-   proc removeDrawables*(this: var Geode, i: cuint, numDrawablesToRemove: cuint): bool  {.importcpp: "removeDrawables".}
-
-
-TODO:
-C++:
-        template<class T, class R> bool replaceDrawable( const ref_ptr<T>& origDraw, const ref_ptr<R>& newDraw ) { return replaceDrawable(origDraw.get(), newDraw.get()); }
-C2NIM:
-proc replaceDrawable*[T; R](this: var Geode; origDraw: ref_ptr[T]; newDraw: ref_ptr[R]): bool {.
-    importcpp: "replaceDrawable", header: "Geode".}
-
-CPP2NIM:
-
-
+importcpp: "osg::Geode(@)"
+YO:
+Geode(@)
 """
 
 import sys
@@ -100,8 +51,8 @@ import glob
 import textwrap
 import re
 from pprint import pprint
-#import oyaml as yaml
-#import networkx as nx
+from pathlib import Path
+
 
 my_dict = {}
 
@@ -173,14 +124,14 @@ def get_nim_type( c_type ):
     if isVar:
         c_type = f"var {c_type}"
 
-    # xxxx::yyyy<zzzzz>
+    # xxxx::yyyy<zzzzz> TODO: MODIFY <map>, [K]
     if "::" in c_type:
         kernel = re.compile("([^<]+)[<]*([^>]*)[>]*")
         _a, _b = kernel.findall(c_type)[0]
         _tmp = _a.split("::")[-1]
         _tmp = _tmp.capitalize()
 
-        my_dict[_tmp] = f'{_tmp}* {{.importcpp: "{_a}", header: "<map>".}} [K] = object'
+        my_dict[_tmp] = f'#{_tmp}* {{.importcpp: "{_a}", header: "<map>".}} [K] = object'
         if _tmp[-1] == "*":
             _tmp = f"ptr {_tmp[:-1]}"
         if _b != "":
@@ -190,7 +141,7 @@ def get_nim_type( c_type ):
     if "<" in c_type and ">" in c_type:
         c_type = c_type.replace("<", "[")
         c_type = c_type.replace(">", "]")
-
+        
     return c_type
 
 
@@ -211,6 +162,10 @@ def export_params(params):
         if p[0]:
             _params += clean(p[0]) + ": "
         _type = get_nim_type(p[1])
+        if len(p) > 2:
+            if p[2] != None:
+                _type += f" = {p[2]}"
+
         _params += _type
         n += 1
     return _params 
@@ -267,8 +222,10 @@ def get_method(data):
     if "templParams" in data:
         if len(data["templParams"]) > 0:
             _templParams = "[" + ";".join( data["templParams"] ) + "]"
-            pprint(data)
-        #print(_templParams)
+            #pprint(data)
+        #if _methodName == "addDrawable":
+        #    pprint(data)
+        #    pprint(_templParams)
 
     _tmp = f'proc {_methodName}*{_templParams}({_params}){_return}  {{.importcpp: "{_importName}".}}\n'
     _tmp += get_comment(data) + "\n"
@@ -287,7 +244,6 @@ def get_typedef(data, include = None):   # TODO: añadir opción si no está ref
     #_data[_file]["typedefs"].append((i["name"], _type))
 
 def get_class(data, include = None, byref = True):
-    #pprint(data)
     _name = data["name"]
     _include = ""
     if include != None:
@@ -295,7 +251,12 @@ def get_class(data, include = None, byref = True):
     _byref = ", byref" 
     if not byref:
         _byref = ", bycopy"
-    _tmp = f'  {_name}* {{.{_include}importcpp: "{_name}"{_byref}.}} = object\n'
+    _inheritance = ""
+    if len(data["base"]) > 0:
+        _inheritance = " of "
+        _inheritance += data["base"][0]   # Nim does not support multiple inheritance
+
+    _tmp = f'  {_name}* {{.{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
     _tmp += get_comment(data) + "\n"
     return _tmp    
 
@@ -306,7 +267,6 @@ def export_per_file(data, files = [], output= "occt", filter=None):
 
     _newfiles = []
     filtered_files = [i for i in files if i.startswith(filter)]
-    #print(files)
     for _file in filtered_files:
         _typedefs     = []
         _constructors = []
@@ -317,11 +277,8 @@ def export_per_file(data, files = [], output= "occt", filter=None):
                 _tmpFile = _file.split(filter)[1]
                 if item[1] == "constructor":
                     _constructors.append(get_constructor(item[2]))
-                    #print(item2[2])
-                    #_classes.append(get_class(item[2], _tmpFile))
                 elif item[1] in ["method", "template"]:
                     _methods.append(get_method(item[2]))
-                    #_classes.append(get_class(item[2], _tmpFile))
                 elif item[1] == "typedef":
                     _typedefs.append( get_typedef(item[2], _tmpFile))
                 elif item[1] == "class":
@@ -336,15 +293,12 @@ def export_per_file(data, files = [], output= "occt", filter=None):
         _nimname = _fname + ".nim"
         _newfiles.append( _nimname)        
         _fname = os.path.join(output, _nimname)
-        #print(_methods)
         if len(_typedefs) > 0 or len(_classes) > 0:
-            #_fp1.write(f'{{.push header: "{_popfile}".}}\n')
-            #_fp1.write("type\n")
             for _i in _typedefs:
                 _fp1.write(_i)
             for _i in _classes:
+                #pprint(_i)
                 _fp1.write(_i)                
-            #_fp1.write(f'{{.pop.}} # header: "{_popfile}\n')
 
         if len(_constructors) > 1 or len(_methods) > 1:
             #print("METHODS")
@@ -359,8 +313,6 @@ def export_per_file(data, files = [], output= "occt", filter=None):
             _fp.close()
 
     _fp1.close()
-
-
 
 def get_root(_blob):
     # Case where a specific file is given (no blob)
@@ -390,10 +342,18 @@ if __name__ == '__main__':
         pass
 
     _root = get_root(_folder)    
-    _files = glob.glob(_folder, recursive = True)
+    _allfiles = glob.glob(_folder, recursive = True)
+    _files = [f for f in _allfiles if os.path.isfile(f)]
+    _dirs = [f for f in _allfiles if not os.path.isfile(f)]
 
     print("Root folder: ", _root)
-
+    # Create folders if needed
+    for i in _dirs:
+        #os.path.join()
+        _rel = os.path.relpath(i, _root)
+        _folder = os.path.join(_dest,_rel)
+        Path(_folder).mkdir(parents=True, exist_ok=True)
+   
     #for root, dirs, files in os.walk(_folder): 
     _fname = os.path.join(_dest,_dest) + ".nim"
     _fp1 = open(_fname, "w")
@@ -412,31 +372,47 @@ if __name__ == '__main__':
         args = ['-x', 'c++',  f"-I{_folder}"]  # "-Wall", '-std=c++11', '-D__CODE_GENERATOR__'
         #opts = TranslationUnit.PARSE_INCOMPLETE | TranslationUnit.PARSE_SKIP_FUNCTION_BODIES # a bitwise or of TranslationUnit.PARSE_XXX flags.
         opts = clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
-        #fname = os.path.join(_root,include_file)
         tu = index.parse(include_file, args, None, opts)
    
         _all = []
-        #_constructors = []
-        _methods = []
-        _typedefs = []
         for depth,node in get_nodes( tu.cursor, depth=0 ):  # Traverses the whole tree
             _node = {}
             # Operator
             if node.kind == clang.cindex.CursorKind.OVERLOADED_DECL_REF:
                 pass
 
-
             # Constructors
             if node.kind == clang.cindex.CursorKind.CONSTRUCTOR:
                 _data = { "name" : node.spelling,
                           "class_name": node.semantic_parent.spelling,
                           "comment": node.brief_comment }
-
+                #if node.canonical.displayname == "Geode()":
+                #    pprint(_data)
+                #    pprint(dir(node))
+                    #pprint(dir(node.semantic_parent))
+                #    t = node.semantic_parent
+                #    print(node.canonical.displayname)
+                #    print(node.lexical_parent.displayname)                    
+                #    print(node.semantic_parent.spelling)
+                    #print(t.displayname)
                 _params = []
                 for i in node.get_children():
                     if i.kind == clang.cindex.CursorKind.PARM_DECL:
                         _paramName = i.displayname
-                        _params.append((i.displayname, i.type.spelling))
+
+                        _default = None
+                        # Getting default values in params
+                        for j in i.get_children():
+                            for k in j.get_children():                                  
+                                if k.kind == clang.cindex.CursorKind.UNEXPOSED_EXPR:
+                                    for m in k.get_tokens():
+                                        _default = m.spelling
+                                if k.kind == clang.cindex.CursorKind.INTEGER_LITERAL:
+                                    try:
+                                        _default = k.get_tokens().__next__().spelling 
+                                    except:
+                                        pass  
+                        _params.append((i.displayname, i.type.spelling, _default))                                                          
                 _data["params"] = _params
                 
                 _file = node.location.file.name
@@ -460,16 +436,37 @@ if __name__ == '__main__':
                 for i in node.get_children():
                     if i.kind == clang.cindex.CursorKind.PARM_DECL:
                         _paramName = i.displayname
-                        _params.append((i.displayname, i.type.spelling))
+                        _default = None
+                        for j in i.get_children():
+                            for k in j.get_children():
+                                if k.kind == clang.cindex.CursorKind.INTEGER_LITERAL:
+                                    try:
+                                        _default = k.get_tokens().__next__().spelling 
+                                    except:
+                                        pass
+
+                        _params.append((i.displayname, i.type.spelling, _default))
+                        # virtual bool removeDrawables(unsigned int i,unsigned int numDrawablesToRemove=1);
+
                 _data["params"] = _params
                 _data["comment"] = node.brief_comment
                 _all.append(( node.location.file.name, "method", _data ))
 
             # Classes
             if node.kind == clang.cindex.CursorKind.CLASS_DECL and node.is_definition():
-            #if node.spelling == "gp_Trsf2d":
                 _data = { "name" : node.spelling,
-                          "comment": node.brief_comment }
+                          "comment": node.brief_comment,
+                          "base" : [] }
+
+                for i in node.get_children():
+                    if i.kind == clang.cindex.CursorKind.CXX_BASE_SPECIFIER:
+                        _name = i.displayname
+                        if "::" in _name:
+                            _name = _name.split("::")[-1]
+                        _data["base"].append( _name )
+                        #if i.kind == clang.cindex.CursorKind.CXX_ACCESS_SPEC_DECL:
+                        #    print("access: ", i.spelling)
+                    
                 _all.append(( node.location.file.name, "class", _data ))
 
             # Types
@@ -485,27 +482,27 @@ if __name__ == '__main__':
                 _data = { "name" : node.spelling,
                           "comment": node.brief_comment }
 
-                _data = {"name" : _name}
+                #_data = {"name" : _name}
                 _data["result"] = node.result_type.spelling
                 _data["class_name"] = node.semantic_parent.spelling
                 _data["const_method"] = node.is_const_method()
-                _data["comment"] = node.brief_comment                                   
+                #_data["comment"] = node.brief_comment                                   
                 _params = []
                 _templParams = []
                 for i in node.get_children():
+                    #if _data["name"] == "addDrawable":
+                    #    print(i.displayname)
                     if i.kind == clang.cindex.CursorKind.PARM_DECL:
                         _paramName = i.displayname
                         _params.append((i.displayname, i.type.spelling))
                     elif i.kind == clang.cindex.CursorKind.TEMPLATE_TYPE_PARAMETER:
-                        if node.spelling == "replaceDrawable": 
-                            _templParams.append(i.displayname)
+                        #if node.spelling == "replaceDrawable": 
+                        _templParams.append(i.displayname)
                 
                 _data["params"] = _params
                 _data["templParams"] = _templParams                
 
                 # Parámetros
-                #if node.spelling == "replaceDrawable": 
-                #    pprint(_data)
                 _all.append(( node.location.file.name, "template", _data ))
 
         # Only consider data associated to the file itself
