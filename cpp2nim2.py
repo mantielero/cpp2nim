@@ -45,7 +45,11 @@ from pathlib import Path
 import collections
 
 
-my_dict = {}
+my_dict = { "const" : [], 
+            "type": {}, 
+            "typedefs": [], 
+            "class": [], 
+            "enums": []}
 
 #function_calls = []             # List of AST node objects that are function calls
 function_declarations = []      # List of AST node objects that are fucntion declarations
@@ -169,7 +173,7 @@ def get_nim_type( c_type ):
         _tmp = _a.split("::")[-1]
         _tmp = _tmp.capitalize()
 
-        my_dict[_tmp] = "#" + f'{_tmp}* {{.importcpp: "{_a}", header: "<map>".}} [K] = object'
+        my_dict["type"][_tmp] = "#" + f'{_tmp}* {{.importcpp: "{_a}", header: "<map>".}} [K] = object'
         if _tmp[-1] == "*":
             _tmp = f"ptr {_tmp[:-1]}"
         
@@ -336,12 +340,6 @@ def get_class(data, include = None, byref = True):
     return _tmp    
 
 def get_enum(data, include = None):
-    """
-  BRepPrim_Direction* {.size: sizeof(cint), importcpp: "BRepPrim_Direction",
-                       header: "BRepPrim_Direction.hxx".} = enum
-    BRepPrim_XMin, BRepPrim_XMax, BRepPrim_YMin, BRepPrim_YMax, BRepPrim_ZMin,
-    BRepPrim_ZMax    
-    """
     _name = data["name"]
     
     _include = ""
@@ -373,9 +371,18 @@ def get_enum(data, include = None):
     _tmp += _itemsTxt + "\n"
     return _tmp 
 
+def get_const(data, include = None):
+    _tmp = ""
+    for i in data["items"]:
+        _tmp += f'  {i["name"]}* = {i["value"]}\n'
+        if i["comment"] != None:
+            _tmp += get_comment(data) + "\n"
+    return _tmp
+
+
 def export_per_file(data, files = [], output= "occt", filter=None):
-    _fname = os.path.join(output,output) + ".nim"
-    _fp1 = open(_fname, "a+")
+    #_fname = os.path.join(output,output) + ".nim"
+    #_fp1 = open(_fname, "a+")
 
     _newfiles = []
     filtered_files = [i for i in files if i.startswith(filter)]
@@ -385,6 +392,7 @@ def export_per_file(data, files = [], output= "occt", filter=None):
         _methods      = []
         _classes      = []
         _enums        = []
+        _const        = []
         for item in data:
             if _file in item[0]:
                 _tmpFile = _file.split(filter)[1]
@@ -397,7 +405,9 @@ def export_per_file(data, files = [], output= "occt", filter=None):
                 elif item[1] == "class":
                     _classes.append(get_class(item[2], _tmpFile))
                 elif item[1] == "enum":
-                    _enums.append(get_enum(item[2], _tmpFile))                
+                    _enums.append(get_enum(item[2], _tmpFile))  
+                elif item[1] == "const":
+                    _const.append(get_const(item[2], _tmpFile))                                   
         _fname = ""
         _popfile = None
         if filter != None:
@@ -407,13 +417,18 @@ def export_per_file(data, files = [], output= "occt", filter=None):
         _nimname = _fname + ".nim"
         _newfiles.append( _nimname)        
         _fname = os.path.join(output, _nimname)
-        if len(_typedefs) > 0 or len(_classes) > 0 or len(_enums) > 0:
-            for _i in _enums:
-                _fp1.write(_i)             
-            for _i in _typedefs:
-                _fp1.write(_i)
-            for _i in _classes:
-                _fp1.write(_i)                
+        my_dict["const"] = my_dict["const"] + _const
+
+        #if len(_typedefs) > 0 or len(_classes) > 0 or len(_enums) > 0:
+        #    for _i in _enums:
+        #        _fp1.write(_i)             
+        #    for _i in _typedefs:
+        #        _fp1.write(_i)
+        #    for _i in _classes:
+        #        _fp1.write(_i)                
+        my_dict["enums"] = my_dict["enums"] + _enums
+        my_dict["typedefs"] = my_dict["typedefs"] + _typedefs
+        my_dict["class"] = my_dict["class"] + _classes
 
         if len(_constructors) > 1 or len(_methods) > 1:
             #print("METHODS")
@@ -427,7 +442,7 @@ def export_per_file(data, files = [], output= "occt", filter=None):
             _fp.write(f'{{.pop.}} # header: "{_popfile}\n')
             _fp.close()
 
-    _fp1.close()
+    #_fp1.close()
 
 def get_root(_blob):
     # Case where a specific file is given (no blob)
@@ -495,7 +510,7 @@ if __name__ == '__main__':
     _fname = os.path.join(_dest,_dest) + ".nim"
     _fp1 = open(_fname, "w")
     _fp1.write('{.passL: "-losg -losgSim -losgAnimation -losgTerrain -losgDB -losgText -losgFX -losgUI -losgGA -losgUtil -losgManipulator -losgViewer -losgParticle -losgVolume -losgPresentation -losgWidget -losgShadow", passC:"-I/usr/include/osg" .}\n\n')
-    _fp1.write("type\n")            
+    #_fp1.write("type\n")            
     _fp1.close()    
 
 
@@ -611,10 +626,11 @@ if __name__ == '__main__':
                 _data["params"] = _params
                 _data["templParams"] = _templParams                
 
+
                 # Parámetros
                 _all.append(( node.location.file.name, "template", _data ))
 
-
+            # ENUMS
             if node.kind == clang.cindex.CursorKind.ENUM_DECL:
                 _data = { "name" : node.spelling,
                           "comment": node.brief_comment,
@@ -627,7 +643,10 @@ if __name__ == '__main__':
                                        "value" : i.enum_value})
 
                 _data["items"] = _items
-                _all.append(( node.location.file.name, "enum", _data ))
+                if _data["name"] != "":
+                    _all.append(( node.location.file.name, "enum", _data ))
+                else:
+                    _all.append(( node.location.file.name, "const", _data ))
 
         # Only consider data associated to the file itself
         _all = [i for i in _all if i[0] == include_file]
@@ -637,9 +656,26 @@ if __name__ == '__main__':
                          filter=_root)
 
     _fp1 = open(_fname, "a+")
-    #_fp1.write("\n\n")
-    for k,v in my_dict.items():
-        _fp1.write(f"  {v}\n\n")
+
+    if len(my_dict["const"]) > 0:
+        _fp1.write("const\n")
+        for txt in my_dict["const"]:
+            _fp1.write(txt)
+    _fp1.write("\n\n")
+
+    if len(my_dict["type"]) > 0 or len(my_dict["enums"]) > 0 or \
+       len(my_dict["typedefs"]) > 0 or len(my_dict["class"]) > 0 :   
+        _fp1.write("type\n")
+        for _i in my_dict["enums"]:
+            _fp1.write(_i)             
+        for _i in my_dict["typedefs"]:
+            _fp1.write(_i)
+        for _i in my_dict["class"]:
+            _fp1.write(_i)  
+        for k,v in my_dict.items():
+            _fp1.write(f"  {v}\n\n")
+
+
 
     for _file in _files:
         _fname = _file.split(_root)[1]
