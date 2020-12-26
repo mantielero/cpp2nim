@@ -17,24 +17,6 @@ c2nim --cpp --header --out:gp_Pnt.nim /usr/include/opencascade/gp_Pnt.hxx
 -----
 TODO: si sale Clase & significa que hay que usar byref y en caso contrario: bycopy
 
-------
-TODO: MixinVector
-To handle properly the templates.
- CursorKind.TRANSLATION_UNIT t.cpp
-  CursorKind.CLASS_TEMPLATE X
-   CursorKind.TEMPLATE_TYPE_PARAMETER T
-  CursorKind.VAR_DECL x
-   CursorKind.TEMPLATE_REF X
-   CursorKind.CALL_EXPR X
-1 x CursorKind.VAR_DECL TypeKind.INVALID
-1 X CursorKind.CALL_EXPR TypeKind.INVALID
------
-TODO:
-C2NIM:
-importcpp: "osg::Geode(@)"
-YO:
-Geode(@)
-
 -----
 TODO: https://nim-lang.org/docs/tut2.html#object-oriented-programming-inheritance
 Definición de tipos. Si usamos "object of <something>", en algún momento 
@@ -52,8 +34,6 @@ type
 TODO: /usr/include/osg/Referenced
 proc constructdepends_on*[T, M](): depends_on {.constructor,importcpp: "depends_on<T, M>".}
 
-----
-TODO: right order in enums
 ----
 TODO: to add first the templates! For example the following:
   ByteArray* {.importcpp: "ByteArray".} = Templateindexarray[GLbyte,Bytearraytype,1,5120]
@@ -356,7 +336,6 @@ def get_typedef(name, data, include = None):   # TODO: añadir opción si no est
     #_data[_file]["typedefs"].append((i["name"], _type))
 
 def get_class(name, data, include = None, byref = True):
-    #_name = data["name"]
     _include = ""
     if include != None:
         _include = f'header: "{include}", '
@@ -370,7 +349,10 @@ def get_class(name, data, include = None, byref = True):
 
     _nameClean = clean(name)
     _name = data["fully_qualified"]
-    _tmp = f'  {_nameClean}* {{.{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
+    _template = ""
+    if len(data["template_params"]) > 0:
+        _template = f'[{", ".join(data["template_params"])}] '
+    _tmp = f'  {_nameClean}* {{.{_include}importcpp: "{_name}"{_byref}.}} {_template}= object{_inheritance}\n'
     _tmp += get_comment(data) + "\n"
     return _tmp    
 
@@ -692,11 +674,17 @@ class ParseFile:
                     if n.kind == clang.cindex.CursorKind.CXX_BASE_SPECIFIER:
                         _tmp["base"].append(n.displayname)
 
-
                 # Get template parameters
-                for _, n in get_nodes(node, depth):
-                    if n.kind == clang.cindex.CursorKind.TEMPLATE_TYPE_PARAMETER:
-                        _tmp["template_params"].append(n.spelling)
+                if node.kind == clang.cindex.CursorKind.CLASS_TEMPLATE:         
+                    for _depth, n in get_nodes(node, depth):
+                        #print(_depth, n.spelling, n.kind)
+                        if n.kind == clang.cindex.CursorKind.TEMPLATE_TYPE_PARAMETER:
+                            _flag = False
+                            _tmp["template_params"].append(n.spelling)
+                        elif n.kind == clang.cindex.CursorKind.CLASS_TEMPLATE:
+                            pass 
+                        else:
+                            break
 
                 _name = _tmp["name"]
                 _tmp.pop("name")
@@ -815,7 +803,7 @@ class ParseFile:
             for k,v in self.classes.items():
                 if v["fully_qualified"] in _set:
                     _filter["class"].append(v["fully_qualified"])   
-        
+
         _filename = self.filename.split(root)[-1]
         _txt = ""
 
@@ -835,6 +823,7 @@ class ParseFile:
                     _txt += get_const(i)
             _txt += "\n\n"
         _n = len(_filter["enum"]) + len(_filter["typedef"]) + len(_filter["class"])
+
         if (len(self.typedefs) + len(self.classes) + len(self.enums) - _n) > 0:
             _txt += "type\n"
             if len(self.enums) > 0:
@@ -850,9 +839,12 @@ class ParseFile:
             if len(self.classes) > 0:
                 for name, data in self.classes.items():
                     if data["fully_qualified"]  not in _filter["class"]:                    
+                        #print(name)
+                        #pprint(data)
+                        #print(get_class(name,data, _filename))
                         _txt += get_class(name,data, _filename)
             _txt += "\n\n"
-        
+
         _flag = (len(self.constructors) + len(self.methods)) >0
         if _flag:
             _txt += f'{{.push header: "{_filename}".}}\n\n'
@@ -908,8 +900,7 @@ if __name__ == '__main__':
         _folder = os.path.join(_dest,_rel)
         Path(_folder).mkdir(parents=True, exist_ok=True)
    
-    #-----------------------------------------------------------
-    #parsed = {}
+    # Start parsing all the include files
     files = {}
 
     _nTotal = len(_files)
@@ -919,7 +910,6 @@ if __name__ == '__main__':
         _n += 1
         pf = ParseFile(include_file)
         files[include_file] = pf
-        #print( pf.export_txt( root = _root ) )
 
     # Find relationships: for each file, it founds what files are providing which types
     providers = relationships( files )  # Contain: file -> (file -> sets)
