@@ -15,6 +15,25 @@ clang -Xclang -ast-dump -fno-diagnostics-color miniz.c
 c2nim --cpp --header --out:gp_Pnt.nim /usr/include/opencascade/gp_Pnt.hxx
 
 -----
+TODO: to check the Array file.
+typedef "Templateindexarray" Templatearray, Boundingsphereimpl looks like a template. It should be in "osg.nim".
+
+  ByteArray* {.header: "Array", importcpp: "osg::ByteArray".} = Templateindexarray[GLbyte,Bytearraytype,1,5120]
+  FloatArray* {.header: "Array", importcpp: "osg::FloatArray".} = Templatearray[GLfloat,Floatarraytype,1,5126]
+
+  BoundingSpheref* {.header: "BoundingSphere", importcpp: "osg::BoundingSpheref".} = Boundingsphereimpl[Vec3f]  
+
+Should it be something like:
+  Boundingboximpl* {.header: "BoundingBox", importcpp: "osg::Boundingboximpl".} [T] = object
+
+  GLUint = object 
+  MixinVector* {.header: "PrimitiveSet", importcpp: "osg::VectorGLuint".} = MixinVector[GLuint]  
+------
+TODO: Vec4us
+For some reason "Vec4us" object is missing:
+
+
+-----
 TODO: si sale Clase & significa que hay que usar byref y en caso contrario: bycopy
 
 -----
@@ -792,8 +811,15 @@ class ParseFile:
         if self.filename in filter:
             _set = filter[self.filename]
             for i in self.consts:
-                if i in _set:
-                    _filter["const"].append(i)
+                for item in i["items"]:
+                    if item["name"] in _set:
+                        _filter["const"].append(item["name"])
+                #except:
+                #    print("_set: ", _set)
+                #    print("i: ", i)
+                #    print("filename: ", self.filename)
+                #    pprint(filter)
+                #    pprint(self.consts)                    
             for i,_ in self.enums.items():
                 if i in _set:
                     _filter["enum"].append(i)  
@@ -809,7 +835,7 @@ class ParseFile:
 
         #if len(dependencies.keys()) > 0:
         for i in dependencies.keys():
-            _tmp = i.split('::')[-1]
+            _tmp = i.split(root)[-1]
             _tmp = _tmp.split('.')[0]
             _types = ', '.join(dependencies[i])
             _txt += f'import {_tmp}  # provides: {_types}\n'
@@ -914,6 +940,7 @@ if __name__ == '__main__':
     # Find relationships: for each file, it founds what files are providing which types
     providers = relationships( files )  # Contain: file -> (file -> sets)
 
+    # The following contains: file-> objects provided
     _filter = {}
     for _, _dict in providers.items():
         for k, sets in _dict.items():
@@ -943,13 +970,15 @@ if __name__ == '__main__':
                 "enum" : [],
                 "typedef"  : [],
                 "class" : [] }
-    for filename, d in providers.items():
-        for file, objects in d.items():
+    #for filename, d in providers.items():
+    #    for file, objects in d.items():
+    for file, objects in _filter.items():
             df = files[file]
             _fname = file.split(_root)[-1]
             for i in df.consts:
-                if i in objects:
-                    _shared["const"].append( get_const(i, _fname) )
+                for item in i["items"]:
+                    if item["name"] in objects:
+                        _shared["const"].append( get_const(item, _fname) )
 
             for k,v in df.enums.items():
                 if k in objects:
@@ -988,5 +1017,5 @@ if __name__ == '__main__':
         _fname = _file.split(_root)[1]
         _fname = os.path.splitext(_fname)[0]
         #_fp1.write(f'include "{_fname}.nim"\n')
-        _fp1.write(f'import {_fname}')
+        _fp1.write(f'import {_fname}\n')
     _fp1.close()            
