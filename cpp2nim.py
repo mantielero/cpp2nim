@@ -15,23 +15,11 @@ clang -Xclang -ast-dump -fno-diagnostics-color miniz.c
 c2nim --cpp --header --out:gp_Pnt.nim /usr/include/opencascade/gp_Pnt.hxx
 
 -----
-TODO: to check the Array file.
-typedef "Templateindexarray" Templatearray, Boundingsphereimpl looks like a template. It should be in "osg.nim".
+TODO: to check the Array file: python cpp2nim3.py "/usr/include/osg/Array" borrame
 
-  ByteArray* {.header: "Array", importcpp: "osg::ByteArray".} = Templateindexarray[GLbyte,Bytearraytype,1,5120]
-  FloatArray* {.header: "Array", importcpp: "osg::FloatArray".} = Templatearray[GLfloat,Floatarraytype,1,5126]
-
-  BoundingSpheref* {.header: "BoundingSphere", importcpp: "osg::BoundingSpheref".} = Boundingsphereimpl[Vec3f]  
-
-Should it be something like:
-  Boundingboximpl* {.header: "BoundingBox", importcpp: "osg::Boundingboximpl".} [T] = object
-
-  GLUint = object 
-  MixinVector* {.header: "PrimitiveSet", importcpp: "osg::VectorGLuint".} = MixinVector[GLuint]  
 ------
 TODO: Vec4us
 For some reason "Vec4us" object is missing:
-
 
 -----
 TODO: si sale Clase & significa que hay que usar byref y en caso contrario: bycopy
@@ -59,6 +47,11 @@ TODO: to add first the templates! For example the following:
 requires: Templateindexarray to be available beforehand
 ----
 TODO: probably, inlines, shouldn't be included. The same applies to private and protected!
+
+-----
+TODO: structs missing
+-----
+TODO: functions
 """
 
 import sys
@@ -117,6 +110,18 @@ def pp(node, ident = 0):
         print("======= BOTTOM =======")    
     else:
         print(f"{spc}------")
+
+def flatten(L):
+    if len(L) == 1:
+        if type(L[0]) == list:
+            result = flatten(L[0])   
+        else:
+            result = L
+    elif type(L[0]) == list:
+        result = flatten(L[0]) + flatten(L[1:])   
+    else:
+        result = [L[0]] + flatten(L[1:])
+    return result
 
 def get_nim_type( c_type ):   
     c_type = c_type.strip()
@@ -370,12 +375,30 @@ def get_class(name, data, include = None, byref = True):
     _name = data["fully_qualified"]
     _template = ""
     if len(data["template_params"]) > 0:
-        _template = f'[{", ".join(data["template_params"])}] '
-    _tmp = f'  {_nameClean}* {{.{_include}importcpp: "{_name}"{_byref}.}} {_template}= object{_inheritance}\n'
+        _tmpList = []
+        for i in data["template_params"]:
+            if type(i) == tuple:
+                _tmp = i[0] + ":" + get_nim_type(i[1])
+                _tmpList.append(_tmp)
+            else:
+                _tmpList.append(i)
+        _template = f'[{"; ".join(_tmpList)}]'
+
+        #_template = f'[{", ".join(data["template_params"])}] '
+    _tmp = f'  {_nameClean}*{_template} {{.{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
     _tmp += get_comment(data) + "\n"
     return _tmp    
 
+def remove_vowels(word):
+    word = word.lower()
+    vowels = ['a','e','i','o','u']
+    word = [i for i in word if i not in vowels]
+    return ''.join(word)
+
 def get_enum(name, data, include = None):
+    _name = name.split("::")[-1]
+    _prefix = remove_vowels( _name )
+
     _include = ""
     if include != None:
         _include = f'header: "{include}", '
@@ -388,7 +411,7 @@ def get_enum(name, data, include = None):
     n = len(_items)
     for i in range(len(_items)):
         _i = _items[i]
-        _itemsTxt += f'    {_i["name"]} = {_i["value"]}'            
+        _itemsTxt += f'    {_prefix}{_i["name"]} = {_i["value"]}'            
         if i<n-1:
             _itemsTxt += ","
         _itemsTxt += "\n"
@@ -396,7 +419,7 @@ def get_enum(name, data, include = None):
             _itemsTxt += get_comment(_i, n=6)
 
     #_items = ", ".join(_items)
-    _name = name.split("::")[-1]
+
     _tmp = f'  {_name}* {{.{_type},{_include}importcpp: "{name}".}} = enum\n'
     if data["comment"] != None:
         _tmp += get_comment(data) + "\n"
@@ -411,124 +434,6 @@ def get_const(data, include = None):
             _tmp += get_comment(data) + "\n"
     return _tmp
 
-
-def export_per_file( data, files = [], output= "occt", filter=None, \
-                     dependencies = {}, root = "", filter_params = {}):
-    _newfiles = []
-    filtered_files = [i for i in files if i.startswith(filter)]
-    for _file in filtered_files:
-        _typedefs     = []
-        _constructors = []
-        _methods      = []
-        _classes      = []
-        _enums        = []
-        _const        = []
-        for item in data:
-            if _file in item[0]:
-                _tmpFile = _file.split(filter)[1]
-                if item[1] == "constructor":
-                    _constructors.append(get_constructor(item[2]))
-                elif item[1] in ["method", "template"]:
-                    _methods.append(get_method(item[2]))
-                elif item[1] == "typedef":
-                    _typedefs.append( get_typedef(item[2], _tmpFile))
-                elif item[1] == "class":
-                    if _file in filter_params:
-                        if item[2] in filter_params[_file]:   
-                            _classes.append(get_class(item[2], _tmpFile))
-                elif item[1] == "enum":
-                    _enums.append(get_enum(item[2], _tmpFile))  
-                elif item[1] == "const":
-                    if _file in filter_params:                    
-                        if item[2] in filter_params[_file]:
-                            _const.append(get_const(item[2], _tmpFile))                                   
-        _fname = ""
-        _popfile = None
-        if filter != None:
-            _fname = _file.split(filter)[1]
-            _popfile = _fname
-        _fname = os.path.splitext(_fname)[0]
-        _nimname = _fname + ".nim"
-        _newfiles.append( _nimname)        
-        _fname = os.path.join(output, _nimname)
-        #my_dict["const"] = my_dict["const"] + _const
-
-        #if len(_typedefs) > 0 or len(_classes) > 0 or len(_enums) > 0:
-        #    for _i in _enums:
-        #        _fp1.write(_i)             
-        #    for _i in _typedefs:
-        #        _fp1.write(_i)
-        #    for _i in _classes:
-        #        _fp1.write(_i)                
-        #my_dict["enums"] = my_dict["enums"] + _enums
-        #my_dict["typedefs"] = my_dict["typedefs"] + _typedefs
-        #my_dict["class"] = my_dict["class"] + _classes
-        
-        # Imports
-        _fp = open(_fname, "w")
-        if _file in dependencies:
-            imports = {}
-            for _dep in dependencies[_file]:
-                #pprint(_dep)
-                try:
-                    _importName = _dep["include"].split(filter)[1]
-                except:
-                    _importName = _dep["include"].split("/")[-1]
-                    _importName = _importName.split(".")[0]
-                _value = imports.get(_importName, [])
-                _value.append(_dep["name"])
-                imports.update( {_importName:_value})
-            #pprint(filter_params)
-            for k, v in imports.items():
-                _tmp = k.split('.')[0]
-                _flag = True
-                for _f, _v in filter_params.items():
-                    if k in _v:
-                        _flag = False
-                #for _f, _v in filter_params["type"]:
-                #    if k in _v:
-                #        _flag = False                        
-                #if k in 
-                _fp.write(f'import {_tmp} # Provides {", ".join(v)}\n')
-            _fp.write('\n\n')
-        _fp.close()
-
-        if len(_const) > 0:
-            _fp = open(_fname, "a+")
-            _fp.write("const\n")
-            for _i in _const:
-                _fp.write(_i)
-            _fp.close()                 
-        #pprint(_classes)         
-        if len(_classes) > 0 or len(_enums) > 0 or len(_typedefs) > 0:
-            _fp = open(_fname, "a+")
-            _fp.write("type\n")
-            if len(_enums) > 1:
-                _fp.write("  # Enums\n")
-            for _i in _enums:
-                _fp.write(_i)
-            if len(_typedefs) > 1:
-                _fp.write("  # Typedefs\n")                   
-            for _i in _typedefs:
-                _fp.write(_i)                
-            if len(_classes) > 1:
-                _fp.write("  # Objects\n")                
-            for _i in _classes:
-                _fp.write(_i)
-            _fp.close()                        
-        if len(_constructors) > 0 or len(_methods) > 0:
-            #print("METHODS")
-            _fp = open(_fname, "a+")
-            _fp.write(f'{{.push header: "{_popfile}".}}\n')        
-            _fp.write("\n\n# Constructors and methods\n")
-            for _i in _constructors:
-                _fp.write(_i)
-            for _i in _methods:
-                _fp.write(_i)        
-            _fp.write(f'{{.pop.}} # header: "{_popfile}\n')
-            _fp.close()
-
-    #_fp1.close()
 
 def get_root(_blob):
     # Case where a specific file is given (no blob)
@@ -598,11 +503,6 @@ def get_nodes(node,depth=0):
     for child in node.get_children():
         yield from get_nodes(child, depth = depth+1)
 
-"""
-    if node.kind == clang.cindex.CursorKind.OVERLOADED_DECL_REF:
-    elif node.kind == clang.cindex.CursorKind.TEMPLATE_REF:
-    elif node.kind == clang.cindex.CursorKind.TEMPLATE_TYPE_PARAMETER:
-"""
 
 class ParseFile:
     """
@@ -622,6 +522,7 @@ class ParseFile:
 
         self.typedefs = {}
         self._parse_typedef()
+        #pprint(self.typedefs)
 
         self.classes = {}
         self._parse_class()
@@ -694,19 +595,26 @@ class ParseFile:
                         _tmp["base"].append(n.displayname)
 
                 # Get template parameters
-                if node.kind == clang.cindex.CursorKind.CLASS_TEMPLATE:         
+                if node.kind == clang.cindex.CursorKind.CLASS_TEMPLATE:
+                    #print(depth)         
                     for _depth, n in get_nodes(node, depth):
                         #print(_depth, n.spelling, n.kind)
                         if n.kind == clang.cindex.CursorKind.TEMPLATE_TYPE_PARAMETER:
                             _flag = False
                             _tmp["template_params"].append(n.spelling)
-                        elif n.kind == clang.cindex.CursorKind.CLASS_TEMPLATE:
+                        elif n.kind == clang.cindex.CursorKind.TEMPLATE_NON_TYPE_PARAMETER:
+                            _templateParam = (n.spelling,n.type.spelling)
+                            _flag = False
+                            _tmp["template_params"].append(_templateParam)                            
+                        elif n.kind in [clang.cindex.CursorKind.CLASS_TEMPLATE, clang.cindex.CursorKind.TYPE_REF]:
                             pass 
                         else:
                             break
 
                 _name = _tmp["name"]
                 _tmp.pop("name")
+                #print("\n\nNAME: ", _name)
+                #pprint(_tmp)
                 self.classes[_name] = _tmp
 
     def _parse_typedef(self):
@@ -720,20 +628,30 @@ class ParseFile:
                          "fully_qualified": fully_qualified(node.referenced),
                          "result": node.result_type.spelling              
                        }
-                
-                self.typedefs.update({_name : _tmp})
-        
-        #_data["params"] = get_params_from_node(node)
-        """
-        _kind = node.underlying_typedef_type.kind
-        if _kind == clang.cindex.TypeKind.POINTER:
-            _pointee = node.underlying_typedef_type.get_pointee()
 
-            if _pointee.kind == clang.cindex.TypeKind.FUNCTIONPROTO:
-                _result = _pointee.get_result().spelling
-                _data["result"] = _result
-                _data["is_function_proto"] = True
-        """
+                # Underlying dependencies
+                _tmp1 = cleanit(_tmp["underlying"])
+                if _tmp1[-1] == ">" and "<" in _tmp1: # In case is based on a template
+                    _tmp1 = [i.split('>') for i in _tmp1.split('<')]
+                    _tmp1 = flatten(_tmp1)
+                    _tmp1 = [i.split(',') for i in _tmp1]
+                    _tmp1 = flatten(_tmp1)
+                    _tmp1 = [i.strip() for i in _tmp1 if i.strip() != '']
+                    _tmp1 = [cleanit(i) for i in _tmp1 if not i.isdigit()]
+                    _tmp["underlying_deps"] = _tmp1
+
+                # The typedef might be for a function
+                _tmp["params"] = get_params_from_node(node)
+                
+                _kind = node.underlying_typedef_type.kind
+                if _kind == clang.cindex.TypeKind.POINTER:
+                    _pointee = node.underlying_typedef_type.get_pointee()
+
+                    if _pointee.kind == clang.cindex.TypeKind.FUNCTIONPROTO:
+                        _result = _pointee.get_result().spelling
+                        _tmp["result"] = _result
+                        _tmp["is_function_proto"] = True                
+                self.typedefs.update({_name : _tmp})
 
     def _parse_constructors(self):
         for depth,node in get_nodes( self.tu.cursor, depth=0 ):
@@ -767,17 +685,32 @@ class ParseFile:
         
                 _tmp["params"] = get_params_from_node(node)
                 self.methods.append(_tmp)
+
     def _find_depends_on(self):
         """Find all dependences in the file"""
         _dependsOn = []
         for i in self.methods:
             for param in i["params"]:
+                _tmp = cleanit(param[1])
+                if _tmp[-1] == ">" and "<" in _tmp:
+                    _tmp = _tmp[:-1].split("<")[0]
                 _dependsOn.append(cleanit(param[1]))
             if i["result"] != None:
                 _dependsOn.append(cleanit(i["result"]))
         
         for _,v in self.typedefs.items():
-            _dependsOn.append(cleanit(v["underlying"]))
+            _tmp = cleanit(v["underlying"])
+            if _tmp[-1] == ">" and "<" in _tmp: # In case is based on a template
+                _tmp = [i.split('>') for i in _tmp.split('<')]
+                _tmp = flatten(_tmp)
+                _tmp = [i.split(',') for i in _tmp]
+                _tmp = flatten(_tmp)
+                _tmp = [i.strip() for i in _tmp if i.strip() != '']
+                _tmp = [cleanit(i) for i in _tmp if not i.isdigit()]
+                _dependsOn += _tmp
+                #pprint(_tmp)
+            else:
+                _dependsOn.append(_tmp)
         self.dependsOn = set(_dependsOn)
 
     def _find_provided(self):
@@ -808,24 +741,28 @@ class ParseFile:
                     "enum"    : [], 
                     "typedef" : [],
                     "class"   : [] }
+        #pprint(self.classes)
+        #pprint(self.typedefs)
+        #pprint(self.dependsOn) 
         if self.filename in filter:
             _set = filter[self.filename]
             for i in self.consts:
                 for item in i["items"]:
                     if item["name"] in _set:
-                        _filter["const"].append(item["name"])
-                #except:
-                #    print("_set: ", _set)
-                #    print("i: ", i)
-                #    print("filename: ", self.filename)
-                #    pprint(filter)
-                #    pprint(self.consts)                    
+                        _filter["const"].append(item["name"])                  
             for i,_ in self.enums.items():
                 if i in _set:
-                    _filter["enum"].append(i)  
+                    _filter["enum"].append(i)
+ 
             for k,v in self.typedefs.items():
                 if v["fully_qualified"] in _set:
-                    _filter["typedef"].append(v["fully_qualified"])                                    
+                    _filter["typedef"].append(v["fully_qualified"])
+                    # We also consider their dependencies (they will be handled in the root file)
+                    if "underlying_deps" in v:
+                        for _i in v["underlying_deps"]:
+                            if _i in self.classes:
+                                _v = self.classes[_i]
+                                _filter["class"].append( _v["fully_qualified"] )
             for k,v in self.classes.items():
                 if v["fully_qualified"] in _set:
                     _filter["class"].append(v["fully_qualified"])   
@@ -857,18 +794,18 @@ class ParseFile:
                     if name not in _filter["enum"]:
                         _txt += get_enum(name,data, _filename)
 
+            # Classes go before typedefs (typedefs might depend on them)
+            if len(self.classes) > 0:
+                for name, data in self.classes.items():
+                    if data["fully_qualified"]  not in _filter["class"]:                    
+                        _txt += get_class(name,data, _filename)
+
             if len(self.typedefs) > 0:
                 for name, data in self.typedefs.items():
                     if data["fully_qualified"] not in _filter["typedef"]:                    
                         _txt += get_typedef(name,data, _filename)
 
-            if len(self.classes) > 0:
-                for name, data in self.classes.items():
-                    if data["fully_qualified"]  not in _filter["class"]:                    
-                        #print(name)
-                        #pprint(data)
-                        #print(get_class(name,data, _filename))
-                        _txt += get_class(name,data, _filename)
+
             _txt += "\n\n"
 
         _flag = (len(self.constructors) + len(self.methods)) >0
@@ -940,12 +877,24 @@ if __name__ == '__main__':
     # Find relationships: for each file, it founds what files are providing which types
     providers = relationships( files )  # Contain: file -> (file -> sets)
 
+
     # The following contains: file-> objects provided
     _filter = {}
     for _, _dict in providers.items():
         for k, sets in _dict.items():
             _set = _filter.get(k, set([]))
             _set = _set.union(sets)
+
+            _pf = files[k]
+            _td = _pf.typedefs # Typedefs for the file
+            for key, value in _td.items(): # Iterate on them
+                if "underlying_deps" in value:  # For those having this field
+                    for _i in value["underlying_deps"]:  # Iterate on their items
+                        #print(_i)
+                        if _i in _pf.classes:     # 
+                            #_v = df.classes[_i]
+                            _set.add( _pf.classes[_i]["fully_qualified"]) #shared["class"].append( get_class(_i,_v, _fname) )
+                            #print("added")
             _filter[k] = _set
 
     # Write files to folder
@@ -986,8 +935,15 @@ if __name__ == '__main__':
             
             for k,v in df.typedefs.items():
                 if v["fully_qualified"] in objects:
-                    _shared["typedef"].append( get_typedef(k,v, _fname) )              
-
+                    _shared["typedef"].append( get_typedef(k,v, _fname) )
+                    # We add the associated classes if any:
+                    """
+                    if "underlying_deps" in v:
+                        for _i in v["underlying_deps"]:
+                            if _i in df.classes:
+                                _v = df.classes[_i]
+                                _shared["class"].append( get_class(_i,_v, _fname) )
+                    """
             for k,v in df.classes.items():
                 if v["fully_qualified"] in objects:
                     _shared["class"].append( get_class(k,v, _fname) ) 
@@ -1004,13 +960,13 @@ if __name__ == '__main__':
         
         for i in _shared["enum"]:
             _fp1.write( i )
+        for i in _shared["class"]:
+            _fp1.write( i )             
         for i in _shared["typedef"]:
             _fp1.write( i )
-        for i in _shared["class"]:
-            _fp1.write( i )            
+           
 
         _fp1.write("\n\n")
-
 
     # write the include files
     for _file,_ in files.items():
