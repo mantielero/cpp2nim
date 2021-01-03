@@ -14,37 +14,48 @@ clang -Xclang -ast-dump=json -x c++ -I/usr/include/osg -fsyntax-only /usr/includ
 clang -Xclang -ast-dump -fno-diagnostics-color miniz.c
 c2nim --cpp --header --out:gp_Pnt.nim /usr/include/opencascade/gp_Pnt.hxx
 
+clang -Xclang -ast-dump -x c++ -I /usr/include/osg ./osg.hpp -fsyntax-only > osg.ast
+
+https://github.com/StatisKit/AutoWIG/blob/master/src/py/autowig/libclang_parser.py
+-----
+TODO: 
+Debe solventar los conflictos en el naming de los tipos presentes en osg_types. 
+Por ejemplo, Type en StateAttribute y Type en Array
+
+-----
+TODO: operators
+proc `[]=`[K, V](this: var StdMap[K, V]; key: K; val: V) {.
+  importcpp: "#[#] = #", header: "<map>".}
+
+I got: 
+proc `=`*(this: var Material, rhs: Material):Material  {.importcpp: "# = #".}
+It should:
+proc `=`*(this: var Material, rhs: Material)  {.importcpp: "# = #".}
+
 -----
 TODO: to check the Array file: python cpp2nim3.py "/usr/include/osg/Array" borrame
 
-------
-TODO: Vec4us
-For some reason "Vec4us" object is missing:
-
 -----
 TODO: si sale Clase & significa que hay que usar byref y en caso contrario: bycopy
+-----
+TODO: for some reason, the enum gets repited:
+    tpInt64ArrayType = 37,
+    tpLastArrayType = 37,
 
+It needs to be replaced by something like:
+   let tpLastArrayType:Type = tpInt64ArrayType
+
+C++ allows using the same ID for different ID
 -----
 TODO: https://nim-lang.org/docs/tut2.html#object-oriented-programming-inheritance
 Definición de tipos. Si usamos "object of <something>", en algún momento 
 habrá que hacer un "object of RootObj". También hay que tener claro si usamos:
 "ref object of RootObj"
-----
-TODO: 
-type
-  KeyValueMap* {.header: "ValueMap", importcpp: "KeyValueMap".} = cint
-  UserValueObject* {.header: "ValueMap", importcpp: "UserValueObject".} = TemplateValueObject[T]
-  UserValueObject* {.header: "ValueMap", importcpp: "UserValueObject".} = TemplateValueObject[T]
-  UserValueObject* {.header: "ValueMap", importcpp: "UserValueObject".} = TemplateValueObject[T]
-  value_type* {.header: "Vec4us", importcpp: "value_type".} = cushort
+
 ----
 TODO: /usr/include/osg/Referenced
 proc constructdepends_on*[T, M](): depends_on {.constructor,importcpp: "depends_on<T, M>".}
 
-----
-TODO: to add first the templates! For example the following:
-  ByteArray* {.importcpp: "ByteArray".} = Templateindexarray[GLbyte,Bytearraytype,1,5120]
-requires: Templateindexarray to be available beforehand
 ----
 TODO: probably, inlines, shouldn't be included. The same applies to private and protected!
 
@@ -185,7 +196,7 @@ def get_nim_type( c_type ):
         kernel = re.compile("([^<]+)[<]*([^>]*)[>]*")
         _a, _b = kernel.findall(c_type)[0]
         _tmp = _a.split("::")[-1]
-        _tmp = _tmp.capitalize()
+        #_tmp = _tmp.capitalize()
 
         #my_dict["type"][_tmp] = "#" + f'{_tmp}* {{.importcpp: "{_a}", header: "<map>".}} [K] = object'
         if _tmp[-1] == "*":
@@ -242,6 +253,8 @@ def export_params(params):
             _params += ", "
         if p[0]:
             _params += clean(p[0]) + ": "
+        else:
+            _params += f'a{n:02d}: '
         _type = get_nim_type(p[1])
         if len(p) > 2:
             if p[2] != None:
@@ -250,7 +263,6 @@ def export_params(params):
         _params += _type
         n += 1
     return _params 
-
 
 def get_comment(data, n = 4):
     spc = " " * n
@@ -328,6 +340,10 @@ def get_method(data):
     return _tmp
 
 def get_typedef(name, data, include = None):   # TODO: añadir opción si no está referenciado, comentar
+    #_type = ""
+    #if "underlying_deps" in data:
+    #    print(data["underlying"])
+    #else:
     _type = get_nim_type( data["underlying"] )
     _include = ""
     if include != None:
@@ -388,16 +404,17 @@ def get_class(name, data, include = None, byref = True):
     _tmp = f'  {_nameClean}*{_template} {{.{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
     _tmp += get_comment(data) + "\n"
     return _tmp    
-
+"""
 def remove_vowels(word):
     word = word.lower()
     vowels = ['a','e','i','o','u']
     word = [i for i in word if i not in vowels]
     return ''.join(word)
-
+"""
 def get_enum(name, data, include = None):
+    #pprint(data)
     _name = name.split("::")[-1]
-    _prefix = remove_vowels( _name )
+    _prefix = "" #remove_vowels( _name )
 
     _include = ""
     if include != None:
@@ -408,9 +425,11 @@ def get_enum(name, data, include = None):
 
     _itemsTxt = ""
     _items = data["items"]
+    #pprint(_items)
     n = len(_items)
     for i in range(len(_items)):
         _i = _items[i]
+        #print(_i)
         _itemsTxt += f'    {_prefix}{_i["name"]} = {_i["value"]}'            
         if i<n-1:
             _itemsTxt += ","
@@ -420,7 +439,7 @@ def get_enum(name, data, include = None):
 
     #_items = ", ".join(_items)
 
-    _tmp = f'  {_name}* {{.{_type},{_include}importcpp: "{name}".}} = enum\n'
+    _tmp = f'  {_name}* {{.{_type},{_include}importcpp: "{name}", pure.}} = enum\n'
     if data["comment"] != None:
         _tmp += get_comment(data) + "\n"
     _tmp += _itemsTxt + "\n"
@@ -503,6 +522,19 @@ def get_nodes(node,depth=0):
     for child in node.get_children():
         yield from get_nodes(child, depth = depth+1)
 
+def get_template_dependencies(tmp):
+    result = []
+    _tmp = cleanit(tmp)
+    if _tmp[-1] == ">" and "<" in _tmp: # In case is based on a template
+        _tmp = [i.split('>') for i in _tmp.split('<')]
+        _tmp = flatten(_tmp)
+        _tmp = [i.split(',') for i in _tmp]
+        _tmp = flatten(_tmp)
+        _tmp = [i.strip() for i in _tmp if i.strip() != '']
+        _tmp = [cleanit(i) for i in _tmp if not i.isdigit()]
+        result = _tmp           
+    return result
+
 
 class ParseFile:
     """
@@ -513,11 +545,13 @@ class ParseFile:
         self.index = clang.cindex.Index.create()
         _args = ['-x', 'c++',  f"-I{_folder}"]  # "-Wall", '-std=c++11', '-D__CODE_GENERATOR__'
         #opts = TranslationUnit.PARSE_INCOMPLETE | TranslationUnit.PARSE_SKIP_FUNCTION_BODIES # a bitwise or of TranslationUnit.PARSE_XXX flags.
-        _opts = clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
+        _opts = clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD | clang.cindex.TranslationUnit.PARSE_INCOMPLETE | clang.cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES
+        #_opts = 
         self.tu = self.index.parse(filename, _args, None, _opts)
         #--- Data
         self.consts = []
         self.enums = {}
+        self.repeated = {}
         self._parse_enums()
 
         self.typedefs = {}
@@ -549,7 +583,7 @@ class ParseFile:
             _tmp = {}
             _isConst = False
             if node.kind == clang.cindex.CursorKind.ENUM_DECL and node.location.file.name == self.filename:
-                _name = fully_qualified(node.referenced)
+                _typeName = fully_qualified(node.referenced)
                 if node.spelling == "":
                     _isConst = True
                 else:
@@ -562,20 +596,34 @@ class ParseFile:
                         _tmp["items"].append( { "name"   : n.spelling,
                                                 "comment": n.brief_comment,
                                                 "value"  : n.enum_value} )
+                #_values = [i["value"] for i in _tmp["items"]]
+                #_values = list(set(_values))
+
+                #_tmp["items"] = _tmp2
+                #pprint(_tmp2)
+
                 if _isConst:
                     #_tmp.pop("name")
                     self.consts.append(_tmp) # Just in case there are several const definitions
                 else:
                     # Sort list
                     _values = [i["value"] for i in _tmp["items"]]
+                    _values = list(set(_values))
                     _values.sort()
+                    _names = [i["name"] for i in _tmp["items"]]                    
                     _new = []
                     for i in _values:
                         for item in _tmp["items"]:
                             if item["value"] == i:
                                 _new.append( item )
+                                _names.remove(item["name"])
+                                break
+                    for _name in _names:
+                        for item in _tmp["items"]:
+                            if item["name"] == _name:
+                                self.repeated[_name] = item
                     _tmp["items"] = _new
-                    self.enums.update({_name : _tmp})
+                    self.enums.update({_typeName : _tmp})
 
     def _parse_class(self):
         """Parse classes (not forward declarations)"""
@@ -629,16 +677,10 @@ class ParseFile:
                          "result": node.result_type.spelling              
                        }
 
+
                 # Underlying dependencies
-                _tmp1 = cleanit(_tmp["underlying"])
-                if _tmp1[-1] == ">" and "<" in _tmp1: # In case is based on a template
-                    _tmp1 = [i.split('>') for i in _tmp1.split('<')]
-                    _tmp1 = flatten(_tmp1)
-                    _tmp1 = [i.split(',') for i in _tmp1]
-                    _tmp1 = flatten(_tmp1)
-                    _tmp1 = [i.strip() for i in _tmp1 if i.strip() != '']
-                    _tmp1 = [cleanit(i) for i in _tmp1 if not i.isdigit()]
-                    _tmp["underlying_deps"] = _tmp1
+                _tmp["underlying_deps"] = get_template_dependencies(_tmp["underlying"])
+
 
                 # The typedef might be for a function
                 _tmp["params"] = get_params_from_node(node)
@@ -674,7 +716,7 @@ class ParseFile:
                     _tmp = _name[8:]
                     if re.match("[+-=*\^/]+", "+-+=*^"):
                         _name = f'`{_tmp}`'
-                
+
                 _tmp = {"name" : _name,
                         "fully_qualified" : fully_qualified(node.referenced),
                         "result" : node.result_type.spelling,
@@ -682,36 +724,58 @@ class ParseFile:
                         "const_method": node.is_const_method(),
                         "comment" : node.brief_comment,
                         "file_origin" : node.location.file.name }
-        
+                    
+                #print(_tmp["result"])                    
+                #pprint(_tmp["result_deps"])
+                #if "<" in _tmp["result"]:
+                _tmp["result_deps"] = get_template_dependencies(_tmp["result"])
+                #    pprint(_tmp)
+                # Methods dependencies for results
+
                 _tmp["params"] = get_params_from_node(node)
                 self.methods.append(_tmp)
 
     def _find_depends_on(self):
         """Find all dependences in the file"""
         _dependsOn = []
-        for i in self.methods:
+
+        for i in (self.methods+self.constructors):
             for param in i["params"]:
-                _tmp = cleanit(param[1])
-                if _tmp[-1] == ">" and "<" in _tmp:
-                    _tmp = _tmp[:-1].split("<")[0]
-                _dependsOn.append(cleanit(param[1]))
-            if i["result"] != None:
-                _dependsOn.append(cleanit(i["result"]))
-        
+                # Param type
+                _tmp1 = get_template_dependencies(param[1])
+                if _tmp1 != []:
+                    for j in _tmp1:
+                        _dependsOn.append(j)
+                else:
+                    _dependsOn.append(cleanit(param[1]))
+
+                # Default value
+                #if "Material" in self.filename:
+                #    print(param)
+                if param[2] != None:
+                    #for k,val in self.enums.items():
+                    #    for j in val["items"]:
+                    #        print(j["name"])
+                    #        if j["name"] == param[2]:
+                    _dependsOn.append(param[2])
+            if "result" in i:
+                if i["result"] != None:
+                    if i["result_deps"] != []:
+                        for j in i["result_deps"]:
+                            _dependsOn.append( j )
+                    else:
+                        _dependsOn.append(cleanit(i["result"]))
+
         for _,v in self.typedefs.items():
-            _tmp = cleanit(v["underlying"])
-            if _tmp[-1] == ">" and "<" in _tmp: # In case is based on a template
-                _tmp = [i.split('>') for i in _tmp.split('<')]
-                _tmp = flatten(_tmp)
-                _tmp = [i.split(',') for i in _tmp]
-                _tmp = flatten(_tmp)
-                _tmp = [i.strip() for i in _tmp if i.strip() != '']
-                _tmp = [cleanit(i) for i in _tmp if not i.isdigit()]
-                _dependsOn += _tmp
-                #pprint(_tmp)
-            else:
-                _dependsOn.append(_tmp)
+            if v["underlying_deps"] != []:
+                for _i in v["underlying_deps"]:
+                    _dependsOn.append( _i )
+            else:            
+                _tmp = cleanit(v["underlying"])
+                _dependsOn.append( _tmp )
+
         self.dependsOn = set(_dependsOn)
+        #pprint(self.dependsOn)
 
     def _find_provided(self):
         """Find all types that the file might provide to others"""
@@ -721,7 +785,9 @@ class ParseFile:
             for item in i["items"]:
                 if item["name"] in self.dependsOn:
                     _provides.append(item["name"])
-        for k,_ in self.enums.items():
+        for k, v in self.enums.items():
+            for i in v["items"]:
+                _provides.append((i["name"],k))
             _provides.append(k)
         for k,v in self.classes.items():
             _provides.append(v["fully_qualified"])
@@ -730,20 +796,22 @@ class ParseFile:
 
         self.provides = set(_provides)
 
+
     def _missing_dependencies(self):
         for i in self.dependsOn:
-            if i not in NORMAL_TYPES and i not in self.provides:
-                self.missing.add( i )
+            if i not in NORMAL_TYPES:
+                if i not in self.provides:
+                    _tmp = [k[0] for k in self.provides if type(k) is tuple]
+                    if i not in _tmp:
+                        self.missing.add( i )
 
-    def export_txt(self, filter = {}, dependencies = {}, root= "/"):
+    def export_txt(self, filter = {}, dependencies = {}, root= "/", shared = None ):
         # Filtering consts, enums, typedefs and type
         _filter = { "const"   : [],
                     "enum"    : [], 
                     "typedef" : [],
                     "class"   : [] }
-        #pprint(self.classes)
-        #pprint(self.typedefs)
-        #pprint(self.dependsOn) 
+        
         if self.filename in filter:
             _set = filter[self.filename]
             for i in self.consts:
@@ -770,12 +838,14 @@ class ParseFile:
         _filename = self.filename.split(root)[-1]
         _txt = ""
 
-        #if len(dependencies.keys()) > 0:
-        for i in dependencies.keys():
-            _tmp = i.split(root)[-1]
-            _tmp = _tmp.split('.')[0]
-            _types = ', '.join(dependencies[i])
-            _txt += f'import {_tmp}  # provides: {_types}\n'
+        if len(dependencies.keys()) > 0:
+            _txt += f'import {shared}\n'            
+            for i in dependencies.keys():
+                _tmp = i.split(root)[-1]
+                _tmp = _tmp.split('.')[0]
+                _types = ', '.join(dependencies[i])
+                #_txt += f'import {_tmp}  # provides: {_types}\n'
+                _txt += f'  # File: {_tmp}  was providing: {_types}\n'
 
         _consts = self.consts
         # Remove shared consts
@@ -831,10 +901,29 @@ def relationships( files ):
         _data = {}
         for f in files.keys():
             if f != file:
+                # The normal case
                 _pf2 = files[f]
                 _found = _pf.missing.intersection(_pf2.provides)
                 if len(_found) > 0:
                     _data[f] = _found
+
+                # The enum case
+                _tmp = [k[0] for k in _pf2.provides if type(k) is tuple]
+                _found2 = _pf.missing.intersection(_tmp)
+                
+                _enumFound = []
+                if len(_found2) > 0:
+                    for item in _found2:
+                        for k in _pf2.provides:
+                            if type(k) is tuple:
+                                if item == k[0]:
+                                    _enumFound.append( k[1])
+                _enumFound = list(set(_enumFound))
+                #print(_enumFound)
+                if len(_found) > 0 or len(_enumFound) > 0:
+                    _data[f] = set(list(_found) + _enumFound)
+
+
         _new[file] = _data
     return _new
 
@@ -899,7 +988,7 @@ if __name__ == '__main__':
 
     # Write files to folder
     for filename, pf in files.items():
-        _txt = pf.export_txt( root = _root, filter = _filter, dependencies = providers[filename] ) 
+        _txt = pf.export_txt( root = _root, filter = _filter, dependencies = providers[filename], shared = _dest + "_types" ) 
         _fname = filename.split( _root )[-1]
         _fname = os.path.splitext(_fname)[0]
         _nimname = _fname + ".nim"
@@ -949,25 +1038,27 @@ if __name__ == '__main__':
                     _shared["class"].append( get_class(k,v, _fname) ) 
     
     # Write the shared consts and types
+    _fname2 = os.path.join(_dest,_dest+ "_types") + ".nim"
+    _fp2 = open(_fname2, "w")    
     if len(_shared["const"]) > 0:
-        _fp1.write("const\n")
+        _fp2.write("const\n")
         for i in _shared["const"]:
-            fp1.write( i )
-        _fp1.write("\n\n")
+            fp2.write( i )
+        _fp2.write("\n\n")
 
     if ( len(_shared["enum"]) + len(_shared["typedef"]) + len(_shared["class"]) ) > 0:
-        _fp1.write("type\n")
+        _fp2.write("type\n")
         
         for i in _shared["enum"]:
-            _fp1.write( i )
+            _fp2.write( i )
         for i in _shared["class"]:
-            _fp1.write( i )             
+            _fp2.write( i )             
         for i in _shared["typedef"]:
-            _fp1.write( i )
+            _fp2.write( i )
            
 
-        _fp1.write("\n\n")
-
+        _fp2.write("\n\n")
+    _fp2.close()
     # write the include files
     for _file,_ in files.items():
         _fname = _file.split(_root)[1]
