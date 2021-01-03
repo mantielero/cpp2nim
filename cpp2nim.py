@@ -27,11 +27,6 @@ TODO: operators
 proc `[]=`[K, V](this: var StdMap[K, V]; key: K; val: V) {.
   importcpp: "#[#] = #", header: "<map>".}
 
-I got: 
-proc `=`*(this: var Material, rhs: Material):Material  {.importcpp: "# = #".}
-It should:
-proc `=`*(this: var Material, rhs: Material)  {.importcpp: "# = #".}
-
 -----
 TODO: to check the Array file: python cpp2nim3.py "/usr/include/osg/Array" borrame
 
@@ -59,8 +54,6 @@ proc constructdepends_on*[T, M](): depends_on {.constructor,importcpp: "depends_
 ----
 TODO: probably, inlines, shouldn't be included. The same applies to private and protected!
 
------
-TODO: structs missing
 -----
 TODO: functions
 """
@@ -325,9 +318,11 @@ def get_method(data):
     #_importName = data["fully_qualified"]    
 
     # Operator case
+    _isOperator = False
     if _importName.startswith("`") and _importName.endswith("`"):
         _importName = _importName[1:-1]
         _importName = f"# {_importName} #"
+        _isOperator = True
     
     # Templates
     _templParams = ""
@@ -335,7 +330,13 @@ def get_method(data):
         if len(data["templParams"]) > 0:
             _templParams = "[" + ";".join( data["templParams"] ) + "]"
     _methodName = clean(_methodName)
-    _tmp = f'proc {_methodName}*{_templParams}({_params}){_return}  {{.importcpp: "{_importName}".}}\n'
+    if _isOperator and _methodName in ["`=`"]:
+        _tmp = f'proc {_methodName}*{_templParams}({_params})  {{.importcpp: "{_importName}".}}\n'
+    elif _isOperator and _methodName in ["`[]`"]:
+        _importName = "#[#]"
+        _tmp = f'proc {_methodName}*{_templParams}({_params})  {{.importcpp: "{_importName}".}}\n'  
+    else:
+        _tmp = f'proc {_methodName}*{_templParams}({_params}){_return}  {{.importcpp: "{_importName}".}}\n'
     _tmp += get_comment(data) + "\n"
     return _tmp
 
@@ -404,13 +405,34 @@ def get_class(name, data, include = None, byref = True):
     _tmp = f'  {_nameClean}*{_template} {{.{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
     _tmp += get_comment(data) + "\n"
     return _tmp    
-"""
-def remove_vowels(word):
-    word = word.lower()
-    vowels = ['a','e','i','o','u']
-    word = [i for i in word if i not in vowels]
-    return ''.join(word)
-"""
+
+def get_struct(name, data, include = None):
+    _include = ""
+    if include != None:
+        _include = f'header: "{include}", '
+    _byref = ", byref" 
+
+    _nameClean = clean(name)
+    _name = data["fully_qualified"]
+    _template = ""
+    """
+    if len(data["template_params"]) > 0:
+        _tmpList = []
+        for i in data["template_params"]:
+            if type(i) == tuple:
+                _tmp = i[0] + ":" + get_nim_type(i[1])
+                _tmpList.append(_tmp)
+            else:
+                _tmpList.append(i)
+        _template = f'[{"; ".join(_tmpList)}]'
+
+        #_template = f'[{", ".join(data["template_params"])}] '
+    """
+    #_tmp = f'  {_nameClean}*{_template} {{.{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
+    _tmp = f'  {_nameClean}* {{.{_include}importcpp: "{_name}".}} = object\n'
+    _tmp += get_comment(data) + "\n"
+    return _tmp
+
 def get_enum(name, data, include = None):
     #pprint(data)
     _name = name.split("::")[-1]
@@ -561,6 +583,9 @@ class ParseFile:
         self.classes = {}
         self._parse_class()
 
+        self.structs = {}
+        self._parse_struct()
+
         self.constructors = [] # Methods and operators
         self._parse_constructors()
 
@@ -596,11 +621,7 @@ class ParseFile:
                         _tmp["items"].append( { "name"   : n.spelling,
                                                 "comment": n.brief_comment,
                                                 "value"  : n.enum_value} )
-                #_values = [i["value"] for i in _tmp["items"]]
-                #_values = list(set(_values))
 
-                #_tmp["items"] = _tmp2
-                #pprint(_tmp2)
 
                 if _isConst:
                     #_tmp.pop("name")
@@ -624,6 +645,17 @@ class ParseFile:
                                 self.repeated[_name] = item
                     _tmp["items"] = _new
                     self.enums.update({_typeName : _tmp})
+
+    def _parse_struct(self):
+        for depth,node in get_nodes( self.tu.cursor, depth=0 ):
+            if node.kind == clang.cindex.CursorKind.STRUCT_DECL and node.location.file.name == self.filename:
+                _tmp = { "name" : node.spelling,
+                         "comment": node.brief_comment,
+                         "base" : [],
+                         "fully_qualified": fully_qualified(node.referenced),
+                         "template_params" : []
+                       }
+                self.structs.update( {node.spelling : _tmp} )              
 
     def _parse_class(self):
         """Parse classes (not forward declarations)"""
@@ -661,8 +693,6 @@ class ParseFile:
 
                 _name = _tmp["name"]
                 _tmp.pop("name")
-                #print("\n\nNAME: ", _name)
-                #pprint(_tmp)
                 self.classes[_name] = _tmp
 
     def _parse_typedef(self):
@@ -791,11 +821,12 @@ class ParseFile:
             _provides.append(k)
         for k,v in self.classes.items():
             _provides.append(v["fully_qualified"])
+        for k,v in self.structs.items():
+            _provides.append(v["fully_qualified"])            
         for k,v in self.typedefs.items():
             _provides.append(v["fully_qualified"])
 
         self.provides = set(_provides)
-
 
     def _missing_dependencies(self):
         for i in self.dependsOn:
@@ -810,10 +841,12 @@ class ParseFile:
         _filter = { "const"   : [],
                     "enum"    : [], 
                     "typedef" : [],
-                    "class"   : [] }
-        
+                    "class"   : [],
+                    "struct"  : []}
+
         if self.filename in filter:
             _set = filter[self.filename]
+            
             for i in self.consts:
                 for item in i["items"]:
                     if item["name"] in _set:
@@ -833,8 +866,12 @@ class ParseFile:
                                 _filter["class"].append( _v["fully_qualified"] )
             for k,v in self.classes.items():
                 if v["fully_qualified"] in _set:
-                    _filter["class"].append(v["fully_qualified"])   
+                    _filter["class"].append(v["fully_qualified"])
 
+            for k,v in self.structs.items():
+                if v["fully_qualified"] in _set:
+                    _filter["struct"].append(v["fully_qualified"])
+            
         _filename = self.filename.split(root)[-1]
         _txt = ""
 
@@ -855,9 +892,9 @@ class ParseFile:
                 if i not in _filter["const"]:
                     _txt += get_const(i)
             _txt += "\n\n"
-        _n = len(_filter["enum"]) + len(_filter["typedef"]) + len(_filter["class"])
+        _n = len(_filter["enum"]) + len(_filter["typedef"]) + len(_filter["class"]) + len(_filter["struct"])
 
-        if (len(self.typedefs) + len(self.classes) + len(self.enums) - _n) > 0:
+        if (len(self.typedefs) + len(self.classes) + len(self.enums) + len(self.structs) - _n) > 0:
             _txt += "type\n"
             if len(self.enums) > 0:
                 for name,data in self.enums.items():
@@ -870,11 +907,15 @@ class ParseFile:
                     if data["fully_qualified"]  not in _filter["class"]:                    
                         _txt += get_class(name,data, _filename)
 
+            if len(self.structs) > 0:
+                for name, data in self.structs.items():
+                    if data["fully_qualified"]  not in _filter["struct"]:                    
+                        _txt += get_struct(name,data, _filename)
+
             if len(self.typedefs) > 0:
                 for name, data in self.typedefs.items():
                     if data["fully_qualified"] not in _filter["typedef"]:                    
                         _txt += get_typedef(name,data, _filename)
-
 
             _txt += "\n\n"
 
@@ -1007,7 +1048,8 @@ if __name__ == '__main__':
     _shared = { "const" : [],
                 "enum" : [],
                 "typedef"  : [],
-                "class" : [] }
+                "class" : [],
+                "struct": [] }
     #for filename, d in providers.items():
     #    for file, objects in d.items():
     for file, objects in _filter.items():
@@ -1037,6 +1079,16 @@ if __name__ == '__main__':
                 if v["fully_qualified"] in objects:
                     _shared["class"].append( get_class(k,v, _fname) ) 
     
+            for k,v in df.structs.items():
+                if v["fully_qualified"] in objects:
+                    _shared["struct"].append( get_struct(k,v, _fname) ) 
+
+    # Check repeated identifiers in "_shared"
+    _identifiers = [i for k,v in _shared.items() for i in v]
+    _repeated = set([x for x in _identifiers if _identifiers.count(x) > 1])
+    print(_repeated)
+
+
     # Write the shared consts and types
     _fname2 = os.path.join(_dest,_dest+ "_types") + ".nim"
     _fp2 = open(_fname2, "w")    
@@ -1046,13 +1098,15 @@ if __name__ == '__main__':
             fp2.write( i )
         _fp2.write("\n\n")
 
-    if ( len(_shared["enum"]) + len(_shared["typedef"]) + len(_shared["class"]) ) > 0:
+    if ( len(_shared["enum"]) + len(_shared["typedef"]) + len(_shared["class"]) + len(_shared["struct"]) ) > 0:
         _fp2.write("type\n")
         
         for i in _shared["enum"]:
             _fp2.write( i )
         for i in _shared["class"]:
-            _fp2.write( i )             
+            _fp2.write( i )       
+        for i in _shared["struct"]:
+            _fp2.write( i )                     
         for i in _shared["typedef"]:
             _fp2.write( i )
            
