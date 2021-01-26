@@ -1,33 +1,53 @@
 # cpp2nim
-Create bindings to C++ projects (Warning - far from complete but might be useful)
+Used to make easier the creation of bindings to C++ projects (Warning - far from complete but might be useful)
 
-It just looks for methods and constructors and wraps them (it even does it right in some cases!). It also puts the types in the project
 
 
 # How to use it
-You can use it as follows:
-- Process a whole folder: the following example will look for all the files within `/usr/include/opencascade` and create a `.nim` for every occurance. All those files will be stored under `occt` folder. It will create also a `occt/occt.nim` file including all those other files and wrapping some objects and types.
+It works in two stages:
+## Parsing
+This is the slowest step. This is done as follows:
+
+- Process a whole folder: the following example will look for all the files within `/usr/include/opencascade`. 
 ```
-python cpp2nim.py "/usr/include/opencascade/*.hxx" occt
+python parse_headers.py "/usr/include/opencascade/*.hxx" occt
 ```
 - Process some of the files: the following will do the same for the files meeting the glob: `gp_*.hxx`. This is useful for very big libraries like OpenCascade (>8000 header files).
 ```
-python cpp2nim.py "/usr/include/opencascade/gp_*.hxx" occt
+python parse_headers.py "/usr/include/opencascade/gp_*.hxx" occt
 ```
 - One file: the following will also work
 ```
-python cpp2nim.py "/usr/include/opencascade/gp_Pnt.hxx" occt
+python parse_headers.py "/usr/include/opencascade/gp_Pnt.hxx" occt
 ```
 
 And for OpenSceneGraph:
 ```
-$ python cpp2nim.py "/usr/include/osg/*" osg
-$ python cpp2nim.py "/usr/include/osgViewer/**/*" osg
+$ python parse_headers.py "/usr/include/osg/*" osg
+$ python parse_headers.py "/usr/include/osgViewer/**/*" osg
 ```
 
 > Provided that those libraries are installed on your system. (only tested on linux)
 
-I recommend to adapt it to your own needs. I think it can give a good start.
+The execution will create the folder writen in the second parameter (`occt` or `osg` in the prior examples). Within them the file `deleteme/files.pickle` will be created with the result from the parsing. It should be easy to export it to `yaml` or `json` and process it directly with nim.
+
+## Bindings generation
+To create the bindings, you just need to do something like:
+```
+$ python analyse.py osg
+```
+This will:
+1. Read the file `osg/deleteme/files.pickle`
+2. Create a `<header>.nim` file per header.
+3. Create a `osg_types.nim` file with shared types across different headers.
+4. Create a `osg.nim` which imports all the other headers.
+
+# Conclusion
+The result most likel won't work, but hopefully will get you closer to the result. 
+
+I recommend to adapt it to your own needs. 
+
+I hope somebody make something better than this. ;oP
 
 # ToDo
 - There is a lot of missing stuff. 
